@@ -8,9 +8,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use weir::config::{Config, Fork};
+use weir::config::{Config, Fork, Notify};
 use weir::forge::Forge;
 use weir::git::{Credential, Git};
+use weir::notify::{self, Notifier};
 use weir::sync::{self, Plan, Sync};
 
 #[derive(Parser)]
@@ -71,6 +72,27 @@ fn validate(path: &Path) -> Result<()> {
             println!("    keeps removed: {path}");
         }
     }
+    // Notification channels are configuration too, and a silent one is the
+    // hardest kind of misconfiguration to notice.
+    if config.notify.is_empty() {
+        println!("  notifications: none configured");
+    }
+    for channel in &config.notify {
+        match channel {
+            Notify::Telegram {
+                token_env,
+                chat_env,
+            } => println!(
+                "  notifications: telegram (reads {token_env} and {chat_env}) — {}",
+                match (env_value(token_env), env_value(chat_env)) {
+                    (Some(_), Some(_)) => "both set",
+                    (None, Some(_)) => "TOKEN MISSING, will stay silent",
+                    (Some(_), None) => "CHAT ID MISSING, will stay silent",
+                    (None, None) => "neither set, will stay silent",
+                }
+            ),
+        }
+    }
     Ok(())
 }
 
@@ -123,13 +145,22 @@ fn run(config_path: &Path, only: Option<&str>, dry_run: bool) -> Result<()> {
         .transpose()?;
     let forge = forge.as_ref().map(|g| g as &dyn Forge);
 
+    let notifiers = build_notifiers(&config);
+
     if dry_run {
         println!("dry run: nothing will be pushed and no pull request will be touched\n");
     }
 
     let mut failed = 0;
     for fork in selected {
-        if let Err(error) = sync_one(&config, fork, credential.clone(), forge, dry_run) {
+        if let Err(error) = sync_one(
+            &config,
+            fork,
+            credential.clone(),
+            forge,
+            &notifiers,
+            dry_run,
+        ) {
             // One bad fork must not stop the others; a weekly run that dies on
             // the first repository silently stops syncing the rest.
             eprintln!("{}: FAILED: {error:#}", fork.repo);
@@ -141,11 +172,46 @@ fn run(config_path: &Path, only: Option<&str>, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
+/// Builds every configured channel, skipping any whose secrets are absent.
+///
+/// A missing token is a warning rather than an error: notifications are a
+/// courtesy, and refusing to sync because nobody can be told would be the wrong
+/// trade every time.
+fn build_notifiers(config: &Config) -> Vec<Box<dyn Notifier>> {
+    let mut notifiers: Vec<Box<dyn Notifier>> = Vec::new();
+    for channel in &config.notify {
+        match channel {
+            Notify::Telegram {
+                token_env,
+                chat_env,
+            } => match (env_value(token_env), env_value(chat_env)) {
+                (Some(token), Some(chat)) => match notify::telegram::Telegram::new(token, chat) {
+                    Ok(telegram) => notifiers.push(Box::new(telegram)),
+                    Err(error) => eprintln!("note: telegram is configured but unusable: {error:#}"),
+                },
+                _ => eprintln!(
+                    "note: telegram is configured but {token_env} or {chat_env} is unset; \
+                     no messages will be sent"
+                ),
+            },
+        }
+    }
+    notifiers
+}
+
+fn env_value(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 fn sync_one(
     config: &Config,
     fork: &Fork,
     credential: Option<Arc<Credential>>,
     forge: Option<&dyn Forge>,
+    notifiers: &[Box<dyn Notifier>],
     dry_run: bool,
 ) -> Result<()> {
     let workspace = tempfile::Builder::new()
@@ -165,7 +231,10 @@ fn sync_one(
         keep_removed: fork.keep_removed.clone(),
     };
 
-    match sync::build(&git, &plan, &fork.upstream)? {
+    let outcome = sync::build(&git, &plan, &fork.upstream)?;
+    let mut pr_url = None;
+
+    match &outcome {
         Sync::UpToDate { delta } => {
             println!(
                 "{}: up to date on {} (counted from {})",
@@ -230,9 +299,16 @@ fn sync_one(
                 );
             }
 
-            reconcile_pr(config, fork, &built, forge, dry_run)?;
+            pr_url = reconcile_pr(config, fork, built, forge, dry_run)?;
         }
     }
+
+    // Last, and never fatal. The sync is already pushed by this point; a
+    // Telegram outage must not turn a completed run into a failed one.
+    notify::announce(
+        notifiers,
+        &notify::summarise(&fork.repo, &outcome, pr_url.as_deref(), dry_run),
+    );
 
     Ok(())
 }
@@ -243,7 +319,7 @@ fn reconcile_pr(
     built: &weir::sync::Built,
     forge: Option<&dyn Forge>,
     dry_run: bool,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let head = &config.defaults.sync_branch;
     let what = weir::forge::describe(
         built,
@@ -258,31 +334,38 @@ fn reconcile_pr(
             "{}: no token, so the pull request was left alone",
             fork.repo
         );
-        return Ok(());
+        return Ok(None);
     };
 
     // The force-push already moved an existing pull request's head; only the
     // title and body still have to follow *this* run's outcome.
     let existing = forge.find_open(&fork.repo, head)?;
-    match (existing, dry_run) {
-        (Some(pr), true) => println!(
-            "{}: would refresh PR #{} — {:?} (dry run)",
-            fork.repo, pr.number, what.title
-        ),
+    Ok(match (existing, dry_run) {
+        (Some(pr), true) => {
+            println!(
+                "{}: would refresh PR #{} — {:?} (dry run)",
+                fork.repo, pr.number, what.title
+            );
+            Some(pr.url)
+        }
         (Some(pr), false) => {
             forge.update(&fork.repo, pr.number, &what)?;
             println!("{}: refreshed PR #{} {}", fork.repo, pr.number, pr.url);
+            Some(pr.url)
         }
-        (None, true) => println!(
-            "{}: would open a pull request — {:?} (dry run)",
-            fork.repo, what.title
-        ),
+        (None, true) => {
+            println!(
+                "{}: would open a pull request — {:?} (dry run)",
+                fork.repo, what.title
+            );
+            None
+        }
         (None, false) => {
             let pr = forge.create(&fork.repo, head, &fork.branch, &what)?;
             println!("{}: opened PR #{} {}", fork.repo, pr.number, pr.url);
+            Some(pr.url)
         }
-    }
-    Ok(())
+    })
 }
 
 fn retire_stale(fork: &Fork, forge: Option<&dyn Forge>, head: &str, dry_run: bool) -> Result<()> {

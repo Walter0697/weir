@@ -161,6 +161,33 @@ it holds no secrets, so world-readable is fine, and a config mounted at mode
 
 The token is the only secret, and it is only ever an environment variable.
 
+## Notifications
+
+An unattended sync is invisible unless it says something, so `weir` can send one
+message per fork per run — including when a sync **fails**, which is the outcome
+most worth hearing about.
+
+```toml
+[[notify]]
+kind = "telegram"
+# token_env = "TELEGRAM_BOT_TOKEN"
+# chat_env  = "TELEGRAM_CHAT_ID"
+```
+
+Like the forge token, only the environment variable *names* live in the config.
+`weir validate` reports whether they are actually set, so a channel that would
+silently stay quiet is visible before you rely on it:
+
+```console
+$ weir validate
+  notifications: telegram (reads TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID) — both set
+```
+
+Sending is **best effort and always last**. The branch is pushed and the pull
+request reconciled before anything is sent, so a missing token or an outage at
+the other end can never turn a completed sync into a failed one — it prints a
+note and carries on.
+
 ## What weir guarantees
 
 If you build anything on top of a sync, these are the things it may rely on.
