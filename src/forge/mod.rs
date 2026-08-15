@@ -25,6 +25,17 @@ pub struct Description {
     pub body: String,
 }
 
+/// A repository on the forge, as offered when adding a fork.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Discovered {
+    pub name: String,
+    pub default_branch: String,
+    /// Where the repository was migrated from, when the forge recorded it.
+    /// Gitea keeps this as `original_url`, which is usually exactly the
+    /// upstream you want, so it can be offered rather than typed.
+    pub upstream: Option<String>,
+}
+
 pub trait Forge {
     /// The open pull request whose head is `head`, if there is one.
     fn find_open(&self, repo: &str, head: &str) -> Result<Option<PullRequest>>;
@@ -34,6 +45,8 @@ pub trait Forge {
     /// head; this makes the title and body describe *this* run.
     fn update(&self, repo: &str, number: u64, what: &Description) -> Result<()>;
     fn close(&self, repo: &str, number: u64) -> Result<()>;
+    /// Repositories under the configured owner, for picking rather than typing.
+    fn discover(&self) -> Result<Vec<Discovered>>;
 }
 
 /// Writes the pull request for a finished sync.

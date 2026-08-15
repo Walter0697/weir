@@ -10,6 +10,26 @@
 #   0 5 * * 5  cd /srv/weir && docker compose run --rm weir run >> /var/log/weir.log 2>&1
 
 services:
+  # The web UI and its scheduler: long-running, unlike the one-shot service
+  # below. The two are alternatives rather than a pair — pick one.
+  #
+  #   docker compose up -d ui
+  #
+  # Published to loopback on the host, because anything that reaches this can
+  # change which repositories get force-pushed. Front it with your reverse
+  # proxy if you want it elsewhere.
+  ui:
+    image: ghcr.io/walter0697/weir:edge
+    restart: unless-stopped
+    command: ["serve", "--db", "/data/weir.db", "--bind", "0.0.0.0:8080"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      # Holds the forge token. Treat this volume as a secret.
+      - weir-data:/data
+
+  # One sync pass, then exit. Configuration comes from forks.toml rather than
+  # from the UI's database; the two are never merged.
   weir:
     image: ghcr.io/walter0697/weir:edge
     # `edge` follows main. Pin a digest or a version tag for anything you would
@@ -36,3 +56,6 @@ services:
     read_only: false
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  weir-data:

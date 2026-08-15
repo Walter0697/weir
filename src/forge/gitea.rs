@@ -3,7 +3,7 @@
 //! Thin on purpose: everything worth getting wrong lives in the parent module
 //! as pure functions. This file only moves JSON.
 
-use super::{Description, Forge, PullRequest};
+use super::{Description, Discovered, Forge, PullRequest};
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 
@@ -135,6 +135,63 @@ impl Forge for Gitea {
             &format!("refreshing pull request #{number} on {repo}"),
         )?;
         Ok(())
+    }
+
+    fn discover(&self) -> Result<Vec<Discovered>> {
+        // An owner is either an organisation or a user and the API separates
+        // them, so try one and fall back rather than making the caller know
+        // which kind theirs is.
+        let body = match self.send(
+            self.client.get(format!(
+                "{}/api/v1/orgs/{}/repos?limit=100",
+                self.base, self.owner
+            )),
+            "listing organisation repositories",
+        ) {
+            Ok(body) => body,
+            Err(_) => self.send(
+                self.client.get(format!(
+                    "{}/api/v1/users/{}/repos?limit=100",
+                    self.base, self.owner
+                )),
+                "listing repositories",
+            )?,
+        };
+
+        let repos: Vec<serde_json::Value> =
+            serde_json::from_str(&body).context("parsing the repository list")?;
+        let mut found: Vec<Discovered> = repos
+            .into_iter()
+            .filter_map(|repo| {
+                let name = repo.get("name")?.as_str()?.to_string();
+                let default_branch = repo
+                    .get("default_branch")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("main")
+                    .to_string();
+                let upstream = repo
+                    .get("original_url")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|u| !u.is_empty())
+                    .map(|u| {
+                        // `original_url` is the browse URL; git wants the clone
+                        // URL, which for the forges people migrate from is the
+                        // same address with `.git`.
+                        if u.ends_with(".git") {
+                            u.to_string()
+                        } else {
+                            format!("{u}.git")
+                        }
+                    });
+                Some(Discovered {
+                    name,
+                    default_branch,
+                    upstream,
+                })
+            })
+            .collect();
+        found.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(found)
     }
 
     fn close(&self, repo: &str, number: u64) -> Result<()> {

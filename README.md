@@ -4,9 +4,9 @@ Keeps a fork on a self-hosted forge in step with its upstream, and puts the
 result in a pull request instead of merging it.
 
 > **Status: usable, early.** It clones, merges, builds and pushes the branch, and
-> opens, refreshes, or retires the pull request. Images are published from
-> `main`. There is no scheduler — run it from a cron, a timer, or a CI job. Use
-> `--dry-run` to point it at a live forge safely.
+> opens, refreshes, or retires the pull request. Run it once from a cron or CI
+> job, or run `weir serve` for a web UI with its own schedule. Use `--dry-run`
+> to point it at a live forge safely.
 
 A weir is a low dam that does not block a river. It regulates what passes and
 lets you measure it on the way over, which is what this does with upstream
@@ -240,6 +240,41 @@ Sending is **best effort and always last**. The branch is pushed and the pull
 request reconciled before anything is sent, so a missing token or an outage at
 the other end can never turn a completed sync into a failed one — it prints a
 note and carries on.
+
+## The web UI
+
+`weir serve` is the alternative to editing a file: it keeps its configuration in
+SQLite, draws a UI for it, and owns a schedule.
+
+```console
+$ weir serve --db /data/weir.db --bind 127.0.0.1:8080
+weir: listening on http://127.0.0.1:8080
+```
+
+It offers the repositories already on your forge rather than making you type
+them, and fills in the upstream from what each was migrated from — Gitea records
+that as `original_url`, which is usually exactly right. Check it before saving.
+
+From there: edit a fork, set a cron schedule, press **Dry run** to see what a
+sync would do, or **Sync all** to do it. Every run is kept with its full output,
+so you can read last Friday's without having been watching.
+
+**Loopback by default, on purpose.** Anything that can reach this can change
+which repositories get force-pushed. Put it behind whatever already fronts your
+other services rather than binding it to the world; it warns at startup if you
+do the latter.
+
+**The database holds your forge token**, so treat the volume as a secret. It is
+created mode 0600, never rendered back to the browser, and never written to the
+audit trail — the trail records only that the token changed.
+
+**Two front ends, never merged.** `weir run --config` reads a TOML file and does
+not open the database; `weir serve` reads the database and ignores `--config`.
+There is always exactly one answer to where a setting came from.
+
+What is *not* in the database is the sync boundary. That stays a file in each
+repository, so closing a pull request unmerged still costs nothing, and losing
+the database costs you settings and history — not correctness.
 
 ## What weir guarantees
 
