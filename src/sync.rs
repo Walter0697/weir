@@ -51,7 +51,9 @@ pub struct Built {
 
 pub enum Sync {
     /// Nothing new upstream. Whatever pull request is open is stale.
-    UpToDate { delta: Delta },
+    UpToDate {
+        delta: Delta,
+    },
     Built(Built),
 }
 
@@ -231,18 +233,30 @@ mod tests {
 
             std::fs::create_dir_all(&upstream).unwrap();
             let up = git_at(&upstream);
-            up.run(&["init", "--quiet", "--initial-branch=main"]).unwrap();
+            up.run(&["init", "--quiet", "--initial-branch=main"])
+                .unwrap();
             commit(&up, "shared.txt", "shared\n");
             commit(&up, DROPPED, "upstream ci\n");
 
             Git::new(dir.path())
-                .run(&["init", "--quiet", "--bare", "--initial-branch=main", "fork.git"])
+                .run(&[
+                    "init",
+                    "--quiet",
+                    "--bare",
+                    "--initial-branch=main",
+                    "fork.git",
+                ])
                 .unwrap();
 
             let seeded = Git::clone_repo(upstream.to_str().unwrap(), "main", &seed, None).unwrap();
             seeded.run(&["rm", "--quiet", "--", DROPPED]).unwrap();
             seeded
-                .run(&["commit", "--quiet", "-m", "Drop upstream CI; this fork uses its own"])
+                .run(&[
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "Drop upstream CI; this fork uses its own",
+                ])
                 .unwrap();
             commit(&seeded, "fork-only.txt", "ours\n");
             seeded.add_remote("fork", fork.to_str().unwrap()).unwrap();
@@ -302,7 +316,10 @@ mod tests {
         assert_eq!(built.merge, Merge::Clean);
         assert_eq!(built.delta.count, 1);
         assert!(sandbox.tracked("fork-only.txt"), "the fork's file survives");
-        assert!(sandbox.tracked("new-from-upstream.txt"), "upstream's arrives");
+        assert!(
+            sandbox.tracked("new-from-upstream.txt"),
+            "upstream's arrives"
+        );
     }
 
     #[test]
@@ -345,7 +362,10 @@ mod tests {
         // The fork edits the same file.
         sandbox.work.run(&["checkout", "--quiet", "main"]).unwrap();
         commit(&sandbox.work, "shared.txt", "our version\n");
-        sandbox.work.run(&["push", "--quiet", "origin", "main"]).unwrap();
+        sandbox
+            .work
+            .run(&["push", "--quiet", "origin", "main"])
+            .unwrap();
         sandbox.work.run(&["fetch", "--quiet", "origin"]).unwrap();
 
         let built = sandbox.built(&[]);
@@ -368,7 +388,10 @@ mod tests {
         commit(&sandbox.upstream(), "shared.txt", "upstream's version\n");
         sandbox.work.run(&["checkout", "--quiet", "main"]).unwrap();
         commit(&sandbox.work, "shared.txt", "our version\n");
-        sandbox.work.run(&["push", "--quiet", "origin", "main"]).unwrap();
+        sandbox
+            .work
+            .run(&["push", "--quiet", "origin", "main"])
+            .unwrap();
         sandbox.work.run(&["fetch", "--quiet", "origin"]).unwrap();
 
         let built = sandbox.built(&[]);
@@ -416,12 +439,17 @@ mod tests {
         let sandbox = Sandbox::new();
         let up = sandbox.upstream();
         up.run(&["rm", "--quiet", "--", DROPPED]).unwrap();
-        up.run(&["commit", "--quiet", "-m", "upstream drops it too"]).unwrap();
+        up.run(&["commit", "--quiet", "-m", "upstream drops it too"])
+            .unwrap();
         commit(&up, DROPPED, "upstream brings it back\n");
 
         let built = sandbox.built(&[DROPPED]);
 
-        assert_eq!(built.merge, Merge::Clean, "re-adding conflicts with nothing");
+        assert_eq!(
+            built.merge,
+            Merge::Clean,
+            "re-adding conflicts with nothing"
+        );
         assert_eq!(built.removed, vec![DROPPED.to_string()]);
         assert!(!sandbox.tracked(DROPPED));
     }
@@ -431,7 +459,10 @@ mod tests {
         let sandbox = Sandbox::new();
         commit(&sandbox.upstream(), "new-from-upstream.txt", "theirs\n");
         let built = sandbox.built(&[]);
-        assert!(built.removed.is_empty(), "nothing was asked for, nothing went");
+        assert!(
+            built.removed.is_empty(),
+            "nothing was asked for, nothing went"
+        );
     }
 
     #[test]

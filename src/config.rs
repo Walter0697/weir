@@ -175,8 +175,7 @@ impl Config {
         struct JustVersion {
             version: Option<u32>,
         }
-        let probe: JustVersion =
-            toml::from_str(text).unwrap_or(JustVersion { version: None });
+        let probe: JustVersion = toml::from_str(text).unwrap_or(JustVersion { version: None });
         match probe.version {
             Some(v) if v != SCHEMA_VERSION => {
                 bail!("config schema version {v} is not supported; this build understands version {SCHEMA_VERSION}")
@@ -386,7 +385,10 @@ branch = "main"
         let text = format!("{MINIMAL}\n[[notify]]\nkind = \"telegram\"\n");
         let config = Config::parse(&text).unwrap();
         match &config.notify[0] {
-            Notify::Telegram { token_env, chat_env } => {
+            Notify::Telegram {
+                token_env,
+                chat_env,
+            } => {
                 assert_eq!(token_env, "TELEGRAM_BOT_TOKEN");
                 assert_eq!(chat_env, "TELEGRAM_CHAT_ID");
             }

@@ -212,7 +212,10 @@ fn sync_one(
                 );
             } else {
                 git.force_push("origin", &plan.sync_branch)?;
-                println!("{}: pushed {} at {}", fork.repo, plan.sync_branch, built.tip);
+                println!(
+                    "{}: pushed {} at {}",
+                    fork.repo, plan.sync_branch, built.tip
+                );
             }
 
             reconcile_pr(config, fork, &built, forge, dry_run)?;
@@ -239,7 +242,10 @@ fn reconcile_pr(
     );
 
     let Some(forge) = forge else {
-        println!("{}: no token, so the pull request was left alone", fork.repo);
+        println!(
+            "{}: no token, so the pull request was left alone",
+            fork.repo
+        );
         return Ok(());
     };
 
@@ -267,14 +273,12 @@ fn reconcile_pr(
     Ok(())
 }
 
-fn retire_stale(
-    fork: &Fork,
-    forge: Option<&dyn Forge>,
-    head: &str,
-    dry_run: bool,
-) -> Result<()> {
+fn retire_stale(fork: &Fork, forge: Option<&dyn Forge>, head: &str, dry_run: bool) -> Result<()> {
     let Some(forge) = forge else {
-        println!("{}: no token, so any open pull request was left alone", fork.repo);
+        println!(
+            "{}: no token, so any open pull request was left alone",
+            fork.repo
+        );
         return Ok(());
     };
     match forge.find_open(&fork.repo, head)? {

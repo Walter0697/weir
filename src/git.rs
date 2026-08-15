@@ -195,7 +195,9 @@ impl Git {
 
     /// Whether a commit object is present in this repository.
     pub fn has_commit(&self, sha: &str) -> Result<bool> {
-        Ok(self.try_run(&["cat-file", "-e", &format!("{sha}^{{commit}}")])?.ok())
+        Ok(self
+            .try_run(&["cat-file", "-e", &format!("{sha}^{{commit}}")])?
+            .ok())
     }
 
     /// Number of commits reachable from `to` but not from `from`.

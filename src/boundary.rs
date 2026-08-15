@@ -150,9 +150,11 @@ mod tests {
         fn new() -> Self {
             let dir = TempDir::new().expect("temp dir");
             let git = Git::new(dir.path());
-            git.run(&["init", "--quiet", "--initial-branch=main"]).unwrap();
+            git.run(&["init", "--quiet", "--initial-branch=main"])
+                .unwrap();
             git.run(&["config", "user.name", "test"]).unwrap();
-            git.run(&["config", "user.email", "test@example.invalid"]).unwrap();
+            git.run(&["config", "user.email", "test@example.invalid"])
+                .unwrap();
             git.run(&["config", "commit.gpgsign", "false"]).unwrap();
             let fixture = Self { _dir: dir, git };
             fixture.commit("base", "base\n");
@@ -187,7 +189,9 @@ mod tests {
         fn squash_merge_upstream(&self) {
             self.checkout("main");
             self.git.run(&["merge", "--squash", "-q", "up"]).unwrap();
-            self.git.run(&["commit", "--quiet", "-m", "Sync with upstream (#7)"]).unwrap();
+            self.git
+                .run(&["commit", "--quiet", "-m", "Sync with upstream (#7)"])
+                .unwrap();
         }
 
         fn record_boundary(&self, sha: &str) {
@@ -203,7 +207,9 @@ mod tests {
             self.checkout("main");
             std::fs::write(self.git.root().join(BOUNDARY), contents).unwrap();
             self.git.run(&["add", BOUNDARY]).unwrap();
-            self.git.run(&["commit", "--quiet", "-m", "boundary"]).unwrap();
+            self.git
+                .run(&["commit", "--quiet", "-m", "boundary"])
+                .unwrap();
         }
 
         fn delta(&self) -> Result<Delta> {
@@ -287,10 +293,14 @@ mod tests {
         // A sync run publishes a branch recording a newer boundary. Nobody
         // merges it, and the pull request is closed.
         let newer = f.upstream_commits(2);
-        f.git.run(&["checkout", "--quiet", "-B", "upstream-sync", "up"]).unwrap();
+        f.git
+            .run(&["checkout", "--quiet", "-B", "upstream-sync", "up"])
+            .unwrap();
         std::fs::write(f.git.root().join(BOUNDARY), format!("{newer}\n")).unwrap();
         f.git.run(&["add", BOUNDARY]).unwrap();
-        f.git.run(&["commit", "--quiet", "-m", "Record boundary"]).unwrap();
+        f.git
+            .run(&["commit", "--quiet", "-m", "Record boundary"])
+            .unwrap();
         f.checkout("main");
 
         let after = f.delta().unwrap();
@@ -334,7 +344,10 @@ mod tests {
         f.write_boundary_verbatim("not a sha at all\n");
         let err = f.delta().unwrap_err().to_string();
         assert!(err.contains("not a commit id"), "{err}");
-        assert!(err.contains("ancestry"), "the error explains what was refused: {err}");
+        assert!(
+            err.contains("ancestry"),
+            "the error explains what was refused: {err}"
+        );
     }
 
     #[test]
@@ -358,7 +371,9 @@ mod tests {
         assert!(is_commit_id("636e505"));
         assert!(!is_commit_id("636e50"), "too short to be unambiguous");
         assert!(!is_commit_id("main"));
-        assert!(!is_commit_id("636e505c5cd809bdce37314f77130ffb4e45c46b\nextra"));
+        assert!(!is_commit_id(
+            "636e505c5cd809bdce37314f77130ffb4e45c46b\nextra"
+        ));
         assert!(!is_commit_id(""));
     }
 }

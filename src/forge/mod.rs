@@ -66,9 +66,7 @@ pub fn describe(
 
     if !built.removed.is_empty() {
         body.push(String::new());
-        body.push(
-            "Kept removed, because this fork does not carry them:".to_string(),
-        );
+        body.push("Kept removed, because this fork does not carry them:".to_string());
         body.push(String::new());
         body.extend(built.removed.iter().map(|p| format!("- `{p}`")));
     }
@@ -89,7 +87,9 @@ pub fn describe(
         // Note the direction. On conflict the branch carries none of the fork's
         // commits, so merging it into the base branch would present every
         // fork-owned change as a deletion.
-        body.push(format!("git checkout -B {sync_branch} origin/{sync_branch}"));
+        body.push(format!(
+            "git checkout -B {sync_branch} origin/{sync_branch}"
+        ));
         body.push(format!("git merge origin/{base}"));
         body.push("# resolve, commit, then:".to_string());
         body.push(format!("git push origin {sync_branch}"));
@@ -149,7 +149,11 @@ mod tests {
             "upstream-sync",
         );
         assert_eq!(what.title, "Sync with upstream main");
-        assert!(what.body.contains("51 new upstream commits."), "{}", what.body);
+        assert!(
+            what.body.contains("51 new upstream commits."),
+            "{}",
+            what.body
+        );
         assert!(what.body.contains("safe to merge"), "{}", what.body);
     }
 
@@ -210,7 +214,11 @@ mod tests {
             "upstream-sync",
         );
         assert_eq!(what.title, "Sync with upstream canary");
-        assert!(what.body.contains("git merge origin/canary"), "{}", what.body);
+        assert!(
+            what.body.contains("git merge origin/canary"),
+            "{}",
+            what.body
+        );
     }
 
     /// The branch name is configurable, so the instructions must not hardcode it.
@@ -223,8 +231,16 @@ mod tests {
             "main",
             "vendor-sync",
         );
-        assert!(what.body.contains("git fetch origin vendor-sync"), "{}", what.body);
-        assert!(what.body.contains("git push origin vendor-sync"), "{}", what.body);
+        assert!(
+            what.body.contains("git fetch origin vendor-sync"),
+            "{}",
+            what.body
+        );
+        assert!(
+            what.body.contains("git push origin vendor-sync"),
+            "{}",
+            what.body
+        );
         assert!(!what.body.contains("upstream-sync"), "{}", what.body);
     }
 
@@ -254,7 +270,11 @@ mod tests {
             "main",
             "upstream-sync",
         );
-        assert!(what.body.contains("1 new upstream commit."), "{}", what.body);
+        assert!(
+            what.body.contains("1 new upstream commit."),
+            "{}",
+            what.body
+        );
     }
 
     /// The boundary is in the body so a human reading the pull request can see

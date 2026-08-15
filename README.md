@@ -12,6 +12,39 @@ A weir is a low dam that does not block a river. It regulates what passes and
 lets you measure it on the way over, which is what this does with upstream
 commits.
 
+## Quick start
+
+```console
+$ cat > forks.toml <<'EOF'
+version = 1
+
+[forge]
+kind  = "gitea"
+url   = "https://gitea.example.com"
+owner = "my-org"
+
+[[fork]]
+repo     = "codex"
+upstream = "https://github.com/openai/codex.git"
+branch   = "main"
+EOF
+
+$ export WEIR_TOKEN=...            # a machine account, write:repository
+$ weir run --dry-run               # look first; touches nothing
+$ weir run                         # push the branch, open the pull request
+```
+
+Typical output:
+
+```
+codex: 75 new upstream commit(s) on main (counted from the recorded boundary 636e505c5cd8)
+codex: CONFLICTS in 3 path(s); the branch is upstream's tip and the pull request will not be mergeable
+codex:   codex-rs/tui/src/app.rs
+codex: boundary 899d1715c87a504ce4c9ec85c2fd7753e33a7be4
+codex: pushed upstream-sync at 8afc0373755f
+codex: opened PR #16
+```
+
 ## Why this exists
 
 If you self-host Gitea or Forgejo and maintain a fork you have genuinely

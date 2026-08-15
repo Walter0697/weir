@@ -74,7 +74,8 @@ fn parse_pr(body: &str, what: &str) -> Result<PullRequest> {
 impl Forge for Gitea {
     fn find_open(&self, repo: &str, head: &str) -> Result<Option<PullRequest>> {
         let body = self.send(
-            self.client.get(self.url(repo, "/pulls?state=open&limit=50")),
+            self.client
+                .get(self.url(repo, "/pulls?state=open&limit=50")),
             &format!("listing open pull requests for {repo}"),
         )?;
         let list: Vec<serde_json::Value> = serde_json::from_str(&body)
