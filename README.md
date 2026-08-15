@@ -71,7 +71,7 @@ picks it up.
 | situation | what happens |
 |---|---|
 | Upstream and your fork edited the same file | Nothing automatic. The pull request is unmergeable and you resolve it. |
-| Upstream edits a path you listed in `keep_removed` | Stays removed, and the removal is named in the pull request body. |
+| Upstream edits a path you listed in `keep_removed` | Stays removed — and the pull request names the path *and every upstream commit that touched it*, so you can see what was discarded. |
 | Upstream adds a file your fork has never seen | Merges cleanly and arrives in the pull request. |
 
 ## How it works
@@ -106,7 +106,7 @@ upstream = "https://github.com/openai/codex.git"
 branch   = "main"
 # Paths this fork deleted on purpose that upstream keeps editing. Enforced
 # after every merge. Not a rule for resolving conflicts generally — anything
-# without a rule here goes to a human.
+# without a rule here is left alone.
 keep_removed = [".github/workflows/rust-release.yml"]
 
 [[fork]]
@@ -222,6 +222,28 @@ Two consequences worth knowing:
 
 If your forge can merge sync pull requests as merge commits rather than
 squashes, prefer that and most of this becomes unnecessary.
+
+## What `keep_removed` costs you
+
+Holding a path out of the fork discards **everything** upstream does inside it.
+That is usually what you want — the file was deleted to be rid of something. But
+a file is a crude unit, and upstream may later put something worth having in the
+same one. Nothing can decide that for you.
+
+So the sync does not try. It reports what it threw away:
+
+```
+codex: kept removed: .github/workflows/python-runtime-build.yml (unchanged upstream since the last sync)
+codex: kept removed: .github/workflows/rust-release.yml (1 upstream commit discarded with it)
+```
+
+and the pull request body lists the commit subjects, capped at five with a count
+for the rest. If one of them is something you want, take the path out of
+`keep_removed` for a run and resolve the conflict by hand, or lift the change
+into wherever your fork keeps that behaviour now.
+
+The same report tells you when an entry has gone stale: a path upstream no
+longer carries stops appearing at all.
 
 ## Licence
 

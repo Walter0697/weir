@@ -68,7 +68,18 @@ pub fn describe(
         body.push(String::new());
         body.push("Kept removed, because this fork does not carry them:".to_string());
         body.push(String::new());
-        body.extend(built.removed.iter().map(|p| format!("- `{p}`")));
+        for removed in &built.removed {
+            body.push(format!("- `{}`", removed.path));
+            // What was discarded is spelled out. A path is usually dropped to be
+            // rid of one feature, and upstream may put something worth having
+            // inside the same file later; nothing can judge that automatically,
+            // so the commits are listed and the reading is left to a person.
+            body.extend(
+                summarise(&removed.upstream_commits)
+                    .iter()
+                    .map(|line| format!("  - {line}")),
+            );
+        }
     }
 
     if conflicts.is_empty() {
@@ -115,10 +126,39 @@ pub fn describe(
     }
 }
 
+/// At most a handful of commit lines, with a count for the rest.
+///
+/// A path dropped years ago can accumulate hundreds of upstream commits, and a
+/// pull request body that opens with two hundred lines of them is one nobody
+/// reads.
+const SUMMARY_LIMIT: usize = 5;
+
+fn summarise(commits: &[String]) -> Vec<String> {
+    if commits.is_empty() {
+        return vec!["no upstream changes since the last sync".to_string()];
+    }
+    let mut lines: Vec<String> = commits.iter().take(SUMMARY_LIMIT).cloned().collect();
+    if commits.len() > SUMMARY_LIMIT {
+        lines.push(format!(
+            "…and {} more upstream commit(s) discarded with this path",
+            commits.len() - SUMMARY_LIMIT
+        ));
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::boundary::{Basis, Delta};
+    use crate::sync::Removed;
+
+    fn removed(path: &str, commits: &[&str]) -> Removed {
+        Removed {
+            path: path.to_string(),
+            upstream_commits: commits.iter().map(|s| s.to_string()).collect(),
+        }
+    }
 
     fn built(count: usize, merge: Merge, removed: &[&str]) -> Built {
         Built {
@@ -127,7 +167,13 @@ mod tests {
                 basis: Basis::Recorded("a".repeat(40)),
             },
             merge,
-            removed: removed.iter().map(|s| s.to_string()).collect(),
+            removed: removed
+                .iter()
+                .map(|s| Removed {
+                    path: s.to_string(),
+                    upstream_commits: Vec::new(),
+                })
+                .collect(),
             upstream_sha: "b".repeat(40),
             tip: "c".repeat(40),
         }
@@ -242,6 +288,45 @@ mod tests {
             what.body
         );
         assert!(!what.body.contains("upstream-sync"), "{}", what.body);
+    }
+
+    /// Keeping a path removed throws away whatever upstream put in it. The
+    /// body has to say so, or the loss is invisible.
+    #[test]
+    fn the_body_names_the_upstream_commits_a_removal_discards() {
+        let mut what = built(2, Merge::Clean, &[]);
+        what.removed = vec![removed(
+            ".github/workflows/rust-release.yml",
+            &[
+                "8c3b7b8 ci: replace GitHub workflows",
+                "f363ed7 fix(release): signing",
+            ],
+        )];
+        let described = describe(
+            &what,
+            "https://github.com/openai/codex.git",
+            "main",
+            "main",
+            "upstream-sync",
+        );
+        assert!(described.body.contains("8c3b7b8"), "{}", described.body);
+        assert!(described.body.contains("f363ed7"), "{}", described.body);
+    }
+
+    #[test]
+    fn a_long_discard_list_is_summarised_rather_than_dumped() {
+        let many: Vec<String> = (0..12).map(|i| format!("abc{i:04} commit {i}")).collect();
+        let lines = summarise(&many);
+        assert_eq!(lines.len(), SUMMARY_LIMIT + 1);
+        assert!(lines.last().unwrap().contains("and 7 more"), "{lines:?}");
+    }
+
+    #[test]
+    fn a_path_upstream_has_not_touched_says_so_rather_than_showing_nothing() {
+        assert_eq!(
+            summarise(&[]),
+            vec!["no upstream changes since the last sync".to_string()]
+        );
     }
 
     #[test]

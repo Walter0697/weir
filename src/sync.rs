@@ -37,12 +37,27 @@ impl Merge {
     }
 }
 
+/// A path held out of the fork, and what upstream did to it meanwhile.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Removed {
+    pub path: String,
+    /// Upstream commits that touched this path since the boundary — precisely
+    /// what keeping it removed is throwing away.
+    ///
+    /// This exists because `keep_removed` is lossy in a way that is easy to
+    /// forget. A file is usually dropped to be rid of one feature, and upstream
+    /// may later put something worth having *inside the same file*. Nothing can
+    /// decide that automatically, so the sync reports what it discarded and
+    /// leaves the reading to whoever wants it.
+    pub upstream_commits: Vec<String>,
+}
+
 pub struct Built {
     pub delta: Delta,
     pub merge: Merge,
-    /// Paths removed to honour `keep_removed`, named so the pull request can
-    /// say what was taken out rather than doing it silently.
-    pub removed: Vec<String>,
+    /// Paths removed to honour `keep_removed`, with what was discarded along
+    /// with them, so nothing goes silently.
+    pub removed: Vec<Removed>,
     /// The upstream commit this sync carries.
     pub upstream_sha: String,
     /// The tip of the sync branch once built.
@@ -94,7 +109,14 @@ pub fn build(git: &Git, plan: &Plan, upstream_url: &str) -> Result<Sync> {
     // recording what each step did. A path can be taken out while resolving the
     // merge or afterwards, and the pull request should say the same thing
     // either way: upstream has this, we deliberately do not.
-    let removed = removed_against(git, &plan.keep_removed, &upstream_ref)?;
+    // Counted from the boundary when there is one, so the report covers exactly
+    // the same span as the commit count and does not repeat what an earlier
+    // sync already showed.
+    let since = match &delta.basis {
+        boundary::Basis::Recorded(sha) => sha.clone(),
+        boundary::Basis::Ancestry => base_ref.clone(),
+    };
+    let removed = removed_against(git, &plan.keep_removed, &upstream_ref, &since)?;
 
     record_boundary(git, &plan.boundary_file, &upstream_sha)?;
 
@@ -134,12 +156,21 @@ fn resolve_or_give_up(git: &Git, plan: &Plan, upstream_ref: &str) -> Result<Merg
     Ok(Merge::Conflicted { paths: conflicts })
 }
 
-/// Which of the listed paths upstream carries and this branch does not.
-fn removed_against(git: &Git, paths: &[String], upstream_ref: &str) -> Result<Vec<String>> {
+/// Which of the listed paths upstream carries and this branch does not, and
+/// what upstream changed in them since `since`.
+fn removed_against(
+    git: &Git,
+    paths: &[String],
+    upstream_ref: &str,
+    since: &str,
+) -> Result<Vec<Removed>> {
     let mut removed = Vec::new();
     for path in paths {
         if git.path_exists_at(upstream_ref, path)? && !git.is_tracked(path)? {
-            removed.push(path.clone());
+            removed.push(Removed {
+                path: path.clone(),
+                upstream_commits: git.commits_touching(since, upstream_ref, path)?,
+            });
         }
     }
     Ok(removed)
@@ -450,8 +481,45 @@ mod tests {
             Merge::Clean,
             "re-adding conflicts with nothing"
         );
-        assert_eq!(built.removed, vec![DROPPED.to_string()]);
+        assert_eq!(
+            built
+                .removed
+                .iter()
+                .map(|r| r.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![DROPPED]
+        );
+        assert!(
+            !built.removed[0].upstream_commits.is_empty(),
+            "the commit that re-added it is reported as discarded"
+        );
         assert!(!sandbox.tracked(DROPPED));
+    }
+
+    /// The honest limit of `keep_removed`: dropping a path throws away every
+    /// upstream change inside it, including ones worth having. Nothing can judge
+    /// that automatically, so the sync has to say what it discarded.
+    #[test]
+    fn keeping_a_path_removed_reports_the_upstream_commits_it_discards() {
+        let sandbox = Sandbox::new();
+        let up = sandbox.upstream();
+        commit(&up, DROPPED, "upstream adds something here\n");
+        commit(&up, DROPPED, "upstream adds a second thing here\n");
+        commit(&up, "elsewhere.txt", "unrelated\n");
+
+        let built = sandbox.built(&[DROPPED]);
+
+        let dropped = built
+            .removed
+            .iter()
+            .find(|r| r.path == DROPPED)
+            .expect("the path was kept removed");
+        assert_eq!(
+            dropped.upstream_commits.len(),
+            2,
+            "both commits touching it are named, and the unrelated one is not: {:?}",
+            dropped.upstream_commits
+        );
     }
 
     #[test]

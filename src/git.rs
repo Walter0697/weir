@@ -223,6 +223,26 @@ impl Git {
         Ok(())
     }
 
+    /// Commits between two refs that touched a path, newest first, as
+    /// `abbrev subject`.
+    ///
+    /// `--follow` is deliberately not used: it needs a path that exists at the
+    /// tip, and these paths are precisely the ones that do not.
+    pub fn commits_touching(&self, from: &str, to: &str, path: &str) -> Result<Vec<String>> {
+        Ok(self
+            .run(&[
+                "log",
+                "--format=%h %s",
+                &format!("{from}..{to}"),
+                "--",
+                path,
+            ])?
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+
     pub fn fetch(&self, remote: &str, branch: &str) -> Result<()> {
         self.run(&["fetch", "--quiet", "--filter=blob:none", remote, branch])?;
         Ok(())

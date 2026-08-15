@@ -200,8 +200,20 @@ fn sync_one(
                     }
                 }
             }
-            for path in &built.removed {
-                println!("{}: kept removed: {path}", fork.repo);
+            for removed in &built.removed {
+                // Say what went with it. Keeping a path removed discards every
+                // upstream change inside it, and this count is the only warning
+                // anyone gets that something worth having may be in there.
+                println!(
+                    "{}: kept removed: {} ({})",
+                    fork.repo,
+                    removed.path,
+                    match removed.upstream_commits.len() {
+                        0 => "unchanged upstream since the last sync".to_string(),
+                        1 => "1 upstream commit discarded with it".to_string(),
+                        n => format!("{n} upstream commits discarded with it"),
+                    }
+                );
             }
             println!("{}: boundary {}", fork.repo, built.upstream_sha);
 
