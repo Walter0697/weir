@@ -8,3 +8,4 @@
 pub mod boundary;
 pub mod config;
 pub mod git;
+pub mod sync;

@@ -3,9 +3,9 @@
 Keeps a fork on a self-hosted forge in step with its upstream, and puts the
 result behind a pull request so a human sees it before it lands.
 
-> **Status: early.** The config schema and the commit-counting logic are written
-> and tested. The parts that actually touch a repository — merging, pushing,
-> opening pull requests — are not built yet. It does not do anything useful today.
+> **Status: early.** Syncing works — it clones, merges, builds the branch, and
+> can push it. Pull requests are not handled yet, so nothing is opened or
+> refreshed for you. Use `--dry-run` to point it at a live forge safely.
 
 A weir is a low dam that does not block a river. It regulates what passes and
 lets you measure it on the way over, which is what this does with upstream
@@ -84,7 +84,16 @@ add one if you are rate-limited or syncing something private.
 
 ```console
 $ weir validate --config forks.toml
+$ weir run --config forks.toml --dry-run
+$ weir run --config forks.toml --repo codex
 ```
+
+`--dry-run` does everything except the two irreversible acts — the force-push
+and the pull request — so it is safe against a live forge.
+
+The token is read from the environment variable named in `token_env` and handed
+to git through `GIT_ASKPASS`. It is never placed in a URL or a command line,
+where the process list would expose it to every other user on the host.
 
 ## What weir guarantees
 

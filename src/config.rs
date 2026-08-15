@@ -39,6 +39,14 @@ pub struct Forge {
     pub url: String,
     /// The owner (user or org) the forks live under.
     pub owner: String,
+    /// The machine account git authenticates as. Not a secret, so it is written
+    /// here rather than passed through the environment.
+    ///
+    /// Optional because a Gitea or Forgejo personal access token is accepted as
+    /// the username on its own. Set it when your forge wants a real account
+    /// name alongside the token.
+    #[serde(default)]
+    pub username: Option<String>,
     /// Name of the environment variable holding the forge token.
     #[serde(default = "default_token_env")]
     pub token_env: String,
