@@ -31,6 +31,11 @@ RUN apt-get update \
 
 # Unprivileged: this clones untrusted upstream code and runs git over it.
 RUN useradd --create-home --uid 10001 weir
+# Created here and owned by that user, so a volume mounted at /data is writable
+# without anyone having to chown it from outside. `serve` keeps its database
+# here, and that database holds the forge token.
+RUN mkdir -p /data && chown weir:weir /data
+VOLUME ["/data"]
 USER weir
 ENV HOME=/home/weir
 
