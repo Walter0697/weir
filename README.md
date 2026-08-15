@@ -86,6 +86,37 @@ add one if you are rate-limited or syncing something private.
 $ weir validate --config forks.toml
 ```
 
+## What weir guarantees
+
+If you build anything on top of a sync — a review job, a bot, a checklist —
+these are the things it may rely on. They are the contract, and breaking one is
+a breaking change.
+
+1. **The sync branch has a fixed name.** `defaults.sync_branch`, `upstream-sync`
+   unless you change it. It is force-pushed on every run.
+2. **At most one open pull request per fork has that branch as its head ref.**
+   That is how you find it; nothing else identifies it.
+3. **After a merge, the boundary file on the base branch holds the upstream
+   commit the fork's content corresponds to.** It moves only when a pull request
+   merges.
+4. **On a clean merge**, the sync branch is your base branch, plus a merge commit
+   for upstream, plus the boundary commit.
+5. **On a conflict**, the sync branch is *upstream's tip* plus the boundary
+   commit. It deliberately contains none of your fork's own commits — that is
+   what makes the forge refuse to merge it.
+
+Point 5 has a consequence worth stating on its own, because getting it backwards
+silently discards fork work:
+
+> **To resolve a conflicting sync, merge the base branch *into* the sync branch,
+> never the reverse.** On conflict the sync branch does not contain your fork's
+> commits, so merging it into your base branch would present all of your own work
+> as deletions.
+
+Note also that the sync branch tip is **not** a pristine upstream commit even in
+the conflict case — the boundary commit sits on top of it. Anything assuming the
+tip is exactly upstream is wrong.
+
 ## The boundary file
 
 `weir` writes a file, `.upstream-sync`, recording which upstream commit the
