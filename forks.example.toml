@@ -20,7 +20,8 @@ upstream = "https://github.com/openai/codex.git"
 branch   = "main"
 # Paths this fork deleted on purpose that upstream keeps editing. Git raises
 # the same delete/modify conflict every sync and the answer never changes, so
-# it is declared once here.
+# it is declared once here and enforced after every merge — which also stops
+# upstream quietly re-adding one of them in a later commit.
 #
 # This is NOT "resolve conflicts by deleting". Any conflict without a rule here
 # is left for a human — the pull request is marked unmergeable on purpose.

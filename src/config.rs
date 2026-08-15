@@ -86,6 +86,12 @@ pub struct Fork {
     /// upstream keeps editing them, so git raises the same delete/modify
     /// conflict every sync and the answer is the same every time.
     ///
+    /// Applied after every merge, not only to conflicting paths. The rule being
+    /// expressed is "this fork does not have these files", which is simpler to
+    /// reason about and idempotent — and it also catches upstream *re-adding* a
+    /// path in a later commit, which produces no conflict at all and would
+    /// otherwise let the file quietly reappear.
+    ///
     /// Exact paths, never globs. A fork usually keeps its own files beside the
     /// ones it dropped — a fork that removed upstream's release workflows may
     /// well keep its own in the same directory — so a glob would quietly eat

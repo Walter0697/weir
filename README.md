@@ -32,6 +32,12 @@ GitHub-only.
 `weir` does not resolve conflicts. When a merge conflicts it says so and hands
 you a branch to finish by hand. Judgement is not a feature anyone ships.
 
+| situation | what happens |
+|---|---|
+| Upstream and your fork edited the same file | Nothing automatic. The pull request is unmergeable and you resolve it. |
+| Upstream edits a path you listed in `keep_removed` | Stays removed, and the removal is named in the pull request body. |
+| Upstream adds a file your fork has never seen | Merges cleanly and arrives in the pull request. |
+
 ## How it works
 
 For each fork it is told about, it clones your copy, fetches the real upstream,
@@ -62,8 +68,9 @@ owner = "my-org"
 repo     = "codex"
 upstream = "https://github.com/openai/codex.git"
 branch   = "main"
-# Paths this fork deleted on purpose that upstream keeps editing. Not a rule
-# for resolving conflicts generally — anything without a rule goes to a human.
+# Paths this fork deleted on purpose that upstream keeps editing. Enforced
+# after every merge. Not a rule for resolving conflicts generally — anything
+# without a rule here goes to a human.
 keep_removed = [".github/workflows/rust-release.yml"]
 
 [[fork]]
