@@ -3,9 +3,10 @@
 Keeps a fork on a self-hosted forge in step with its upstream, and puts the
 result behind a pull request so a human sees it before it lands.
 
-> **Status: early.** Syncing works — it clones, merges, builds the branch, and
-> can push it. Pull requests are not handled yet, so nothing is opened or
-> refreshed for you. Use `--dry-run` to point it at a live forge safely.
+> **Status: works, not yet packaged.** It clones, merges, builds and pushes the
+> branch, and opens, refreshes, or retires the pull request. There is no
+> container image and no scheduler yet — run it from a cron, a CI job, or by
+> hand. Use `--dry-run` to point it at a live forge safely.
 
 A weir is a low dam that does not block a river. It regulates what passes and
 lets you measure it on the way over, which is what this does with upstream

@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use weir::config::{Config, Fork};
+use weir::forge::Forge;
 use weir::git::{Credential, Git};
 use weir::sync::{self, Plan, Sync};
 
@@ -95,17 +96,28 @@ fn run(config_path: &Path, only: Option<&str>, dry_run: bool) -> Result<()> {
         None => config.forks.iter().collect(),
     };
 
-    let credential = match std::env::var(&config.forge.token_env) {
-        Ok(token) if !token.trim().is_empty() => Some(Arc::new(Credential::new(token)?)),
-        _ => {
-            eprintln!(
-                "note: {} is unset, so the forge is accessed anonymously; \
-                 private repositories and pushing will fail",
-                config.forge.token_env
-            );
-            None
-        }
-    };
+    // One token serves both halves: git uses it as the push password, the API
+    // uses it as a bearer.
+    let token = std::env::var(&config.forge.token_env)
+        .ok()
+        .filter(|t| !t.trim().is_empty());
+    if token.is_none() {
+        eprintln!(
+            "note: {} is unset, so the forge is accessed anonymously; private repositories, \
+             pushing, and pull requests will all fail",
+            config.forge.token_env
+        );
+    }
+
+    let credential = token
+        .as_deref()
+        .map(|t| Credential::new(t).map(Arc::new))
+        .transpose()?;
+    let forge = token
+        .as_deref()
+        .map(|t| weir::forge::gitea::Gitea::new(config.forge_url(), &config.forge.owner, t))
+        .transpose()?;
+    let forge = forge.as_ref().map(|g| g as &dyn Forge);
 
     if dry_run {
         println!("dry run: nothing will be pushed and no pull request will be touched\n");
@@ -113,7 +125,7 @@ fn run(config_path: &Path, only: Option<&str>, dry_run: bool) -> Result<()> {
 
     let mut failed = 0;
     for fork in selected {
-        if let Err(error) = sync_one(&config, fork, credential.clone(), dry_run) {
+        if let Err(error) = sync_one(&config, fork, credential.clone(), forge, dry_run) {
             // One bad fork must not stop the others; a weekly run that dies on
             // the first repository silently stops syncing the rest.
             eprintln!("{}: FAILED: {error:#}", fork.repo);
@@ -129,6 +141,7 @@ fn sync_one(
     config: &Config,
     fork: &Fork,
     credential: Option<Arc<Credential>>,
+    forge: Option<&dyn Forge>,
     dry_run: bool,
 ) -> Result<()> {
     let workspace = tempfile::Builder::new()
@@ -156,7 +169,10 @@ fn sync_one(
                 fork.branch,
                 describe(&delta.basis)
             );
-            println!("{}: any open sync pull request is stale", fork.repo);
+            // Nothing new upstream. A pull request that is still open was
+            // resolved by merging locally, which never closes it through the
+            // API, so retire it here.
+            retire_stale(fork, forge, &config.defaults.sync_branch, dry_run)?;
         }
         Sync::Built(built) => {
             println!(
@@ -194,12 +210,74 @@ fn sync_one(
                 git.force_push("origin", &plan.sync_branch)?;
                 println!("{}: pushed {} at {}", fork.repo, plan.sync_branch, built.tip);
             }
+
+            reconcile_pr(config, fork, &built, forge, dry_run)?;
         }
     }
 
-    // Not built yet — say so rather than leaving the impression a pull request
-    // was reconciled.
-    println!("{}: pull requests are not handled yet", fork.repo);
+    Ok(())
+}
+
+fn reconcile_pr(
+    config: &Config,
+    fork: &Fork,
+    built: &weir::sync::Built,
+    forge: Option<&dyn Forge>,
+    dry_run: bool,
+) -> Result<()> {
+    let head = &config.defaults.sync_branch;
+    let what = weir::forge::describe(built, &fork.upstream, fork.upstream_branch(), &fork.branch);
+
+    let Some(forge) = forge else {
+        println!("{}: no token, so the pull request was left alone", fork.repo);
+        return Ok(());
+    };
+
+    // The force-push already moved an existing pull request's head; only the
+    // title and body still have to follow *this* run's outcome.
+    let existing = forge.find_open(&fork.repo, head)?;
+    match (existing, dry_run) {
+        (Some(pr), true) => println!(
+            "{}: would refresh PR #{} — {:?} (dry run)",
+            fork.repo, pr.number, what.title
+        ),
+        (Some(pr), false) => {
+            forge.update(&fork.repo, pr.number, &what)?;
+            println!("{}: refreshed PR #{} {}", fork.repo, pr.number, pr.url);
+        }
+        (None, true) => println!(
+            "{}: would open a pull request — {:?} (dry run)",
+            fork.repo, what.title
+        ),
+        (None, false) => {
+            let pr = forge.create(&fork.repo, head, &fork.branch, &what)?;
+            println!("{}: opened PR #{} {}", fork.repo, pr.number, pr.url);
+        }
+    }
+    Ok(())
+}
+
+fn retire_stale(
+    fork: &Fork,
+    forge: Option<&dyn Forge>,
+    head: &str,
+    dry_run: bool,
+) -> Result<()> {
+    let Some(forge) = forge else {
+        println!("{}: no token, so any open pull request was left alone", fork.repo);
+        return Ok(());
+    };
+    match forge.find_open(&fork.repo, head)? {
+        None => println!("{}: no open sync pull request", fork.repo),
+        Some(pr) if dry_run => println!(
+            "{}: would close stale PR #{} (dry run)",
+            fork.repo, pr.number
+        ),
+        Some(pr) => {
+            forge.close(&fork.repo, pr.number)?;
+            println!("{}: closed stale PR #{}", fork.repo, pr.number);
+        }
+    }
     Ok(())
 }
 
