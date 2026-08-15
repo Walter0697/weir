@@ -96,6 +96,27 @@ The token is read from the environment variable named in `token_env` and handed
 to git through `GIT_ASKPASS`. It is never placed in a URL or a command line,
 where the process list would expose it to every other user on the host.
 
+## Running it
+
+The container performs one pass and exits, so anything that can run a command on
+a schedule can run it — cron, a systemd timer, a CI job, a Kubernetes CronJob.
+There is deliberately no scheduler inside.
+
+```console
+$ docker run --rm \
+    -v /etc/weir/forks.toml:/etc/weir/forks.toml:ro \
+    -e WEIR_TOKEN \
+    ghcr.io/walter0697/weir:latest \
+    run --config /etc/weir/forks.toml
+```
+
+The image runs as an unprivileged user (uid 10001), because it clones upstream
+code and runs git over it. Your mounted config must be readable by that user —
+it holds no secrets, so world-readable is fine, and a config mounted at mode
+`600` from another uid will fail with a permission error.
+
+The token is the only secret, and it is only ever an environment variable.
+
 ## What weir guarantees
 
 If you build anything on top of a sync — a review job, a bot, a checklist —
