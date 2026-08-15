@@ -1,0 +1,10 @@
+//! Syncs a fork with its upstream and opens a pull request for review.
+//!
+//! The library half holds the logic; the binary is one caller of it, and a
+//! long-running server would be another. Keeping them apart is what lets the
+//! interesting parts — the boundary in particular — be tested without a forge,
+//! a network, or a scheduler.
+
+pub mod boundary;
+pub mod config;
+pub mod git;

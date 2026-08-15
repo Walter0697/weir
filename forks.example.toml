@@ -1,0 +1,33 @@
+# Example fork list. Copy it, point it at your own forge, and keep it wherever
+# your deployment lives — this file holds no secrets, only the names of the
+# environment variables that carry them.
+
+version = 1
+
+[forge]
+kind  = "gitea"          # or "forgejo" — same API
+url   = "https://gitea.example.com"
+owner = "my-org"
+# token_env = "WEIR_TOKEN"   # a machine account's token, write:repository scope
+
+[defaults]
+# sync_branch   = "upstream-sync"
+# boundary_file = ".upstream-sync"
+
+[[fork]]
+repo     = "codex"
+upstream = "https://github.com/openai/codex.git"
+branch   = "main"
+# Paths this fork removes on purpose, which upstream keeps editing. Deleted
+# rather than conflicted, so an otherwise clean sync stays clean.
+drop_on_conflict = [
+  ".github/workflows/rust-release.yml",
+]
+
+[[fork]]
+repo     = "dokploy"
+upstream = "https://github.com/Dokploy/dokploy.git"
+branch   = "canary"          # forks need not agree about their base branch
+
+# [[notify]]
+# kind = "telegram"
