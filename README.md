@@ -148,8 +148,9 @@ Pass the token as `-e WEIR_TOKEN` with **no value**, so docker forwards it by
 name. Writing `-e WEIR_TOKEN="$(cat …)"` puts the secret in the docker client's
 own argument list, where `ps` will show it to every user on the host.
 
-Images are published to `ghcr.io/walter0697/weir` on each `v*` tag, tagged
-`{version}`, `{major}.{minor}`, and `latest`.
+Images are published to `ghcr.io/walter0697/weir`. Every commit on `main`
+publishes `edge` and `sha-<commit>`; `latest` and the semantic version tags are
+reserved for releases, so `edge` never becomes `latest` by accident.
 
 The image runs as an unprivileged user (uid 10001), because it clones upstream
 code and runs git over it. Your mounted config must be readable by that user —

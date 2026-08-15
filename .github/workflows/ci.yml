@@ -1,10 +1,9 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
-  # So the release workflow can run the same checks before publishing anything.
+  # Main is covered by CD, which calls this before publishing anything. Keeping
+  # the push trigger here as well would run every check twice per commit.
   workflow_call:
   workflow_dispatch:
 
