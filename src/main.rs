@@ -98,9 +98,13 @@ fn run(config_path: &Path, only: Option<&str>, dry_run: bool) -> Result<()> {
 
     // One token serves both halves: git uses it as the push password, the API
     // uses it as a bearer.
+    // Trimmed, because a token routinely arrives with a trailing newline — from
+    // a pasted heredoc, a docker `--env-file`, or a mounted secret — and the
+    // resulting authentication failure says nothing about why.
     let token = std::env::var(&config.forge.token_env)
         .ok()
-        .filter(|t| !t.trim().is_empty());
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
     if token.is_none() {
         eprintln!(
             "note: {} is unset, so the forge is accessed anonymously; private repositories, \
