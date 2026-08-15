@@ -1,4 +1,4 @@
-//! Syncs a fork with its upstream and opens a pull request for review.
+//! Syncs a fork with its upstream and opens a pull request for the result.
 //!
 //! The binary performs one pass and exits. Deciding *when* it runs belongs
 //! outside it — a scheduler, a cron, a CI workflow, or the `serve` command once

@@ -105,9 +105,9 @@ pub struct Fork {
     /// drops three of upstream's twenty workflows — so a directory glob would
     /// take seventeen files nobody asked about.
     ///
-    /// This is the one place the sync exercises judgement, so it is declared
-    /// per fork rather than decided in code, and every path it removes is
-    /// named in the pull request body.
+    /// This is the one place a sync resolves anything on its own, so it is
+    /// declared per fork rather than decided in code, and every path it removes
+    /// is named in the pull request body.
     #[serde(default)]
     pub keep_removed: Vec<String>,
 }

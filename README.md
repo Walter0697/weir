@@ -1,12 +1,12 @@
 # weir
 
 Keeps a fork on a self-hosted forge in step with its upstream, and puts the
-result behind a pull request so a human sees it before it lands.
+result in a pull request instead of merging it.
 
-> **Status: works, not yet packaged.** It clones, merges, builds and pushes the
-> branch, and opens, refreshes, or retires the pull request. There is no
-> container image and no scheduler yet — run it from a cron, a CI job, or by
-> hand. Use `--dry-run` to point it at a live forge safely.
+> **Status: usable, early.** It clones, merges, builds and pushes the branch, and
+> opens, refreshes, or retires the pull request. Images are published from
+> `main`. There is no scheduler — run it from a cron, a timer, or a CI job. Use
+> `--dry-run` to point it at a live forge safely.
 
 A weir is a low dam that does not block a river. It regulates what passes and
 lets you measure it on the way over, which is what this does with upstream
@@ -63,11 +63,10 @@ The gap is the combination: **a pull request, against a self-hosted forge.**
 Everything forge-native merges without producing one; the two tools that do open
 pull requests are GitHub-only.
 
-To be clear about what that buys, since it is easy to overstate: `weir` does not
-review anything and does not resolve conflicts. It produces the thing a reviewer
-works on — a branch and a pull request, with the outcome described — and then
-stops. Whether a person reads it, a bot comments on it, or it sits there for a
-week is not its business. Judgement is not a feature anyone ships.
+`weir`'s job ends at the pull request. It builds the branch, describes what
+happened, and stops. It does not merge, and it does not resolve conflicts —
+when a merge conflicts it says which paths and leaves the branch for whoever
+picks it up.
 
 | situation | what happens |
 |---|---|
@@ -164,9 +163,8 @@ The token is the only secret, and it is only ever an environment variable.
 
 ## What weir guarantees
 
-If you build anything on top of a sync — a review job, a bot, a checklist —
-these are the things it may rely on. They are the contract, and breaking one is
-a breaking change.
+If you build anything on top of a sync, these are the things it may rely on.
+They are the contract, and breaking one is a breaking change.
 
 1. **The sync branch has a fixed name.** `defaults.sync_branch`, `upstream-sync`
    unless you change it. It is force-pushed on every run.

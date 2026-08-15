@@ -1,4 +1,4 @@
-//! Syncs a fork with its upstream and opens a pull request for review.
+//! Syncs a fork with its upstream and opens a pull request for the result.
 //!
 //! The library half holds the logic; the binary is one caller of it, and a
 //! long-running server would be another. Keeping them apart is what lets the
