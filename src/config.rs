@@ -100,10 +100,10 @@ pub struct Fork {
     /// path in a later commit, which produces no conflict at all and would
     /// otherwise let the file quietly reappear.
     ///
-    /// Exact paths, never globs. A fork usually keeps its own files beside the
-    /// ones it dropped — a fork that removed upstream's release workflows may
-    /// well keep its own in the same directory — so a glob would quietly eat
-    /// the wrong thing.
+    /// Exact paths, never globs. The directory a dropped path sits in almost
+    /// always holds others the fork does want — the fork that motivated this
+    /// drops three of upstream's twenty workflows — so a directory glob would
+    /// take seventeen files nobody asked about.
     ///
     /// This is the one place the sync exercises judgement, so it is declared
     /// per fork rather than decided in code, and every path it removes is

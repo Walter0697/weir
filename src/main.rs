@@ -230,7 +230,13 @@ fn reconcile_pr(
     dry_run: bool,
 ) -> Result<()> {
     let head = &config.defaults.sync_branch;
-    let what = weir::forge::describe(built, &fork.upstream, fork.upstream_branch(), &fork.branch);
+    let what = weir::forge::describe(
+        built,
+        &fork.upstream,
+        fork.upstream_branch(),
+        &fork.branch,
+        head,
+    );
 
     let Some(forge) = forge else {
         println!("{}: no token, so the pull request was left alone", fork.repo);

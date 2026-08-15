@@ -37,17 +37,23 @@ pub trait Forge {
 }
 
 /// Writes the pull request for a finished sync.
-pub fn describe(built: &Built, upstream: &str, upstream_branch: &str, base: &str) -> Description {
+pub fn describe(
+    built: &Built,
+    upstream: &str,
+    upstream_branch: &str,
+    base: &str,
+    sync_branch: &str,
+) -> Description {
     let conflicts = match &built.merge {
         Merge::Clean => Vec::new(),
         Merge::Conflicted { paths } => paths.clone(),
     };
 
-    let title = if conflicts.is_empty() {
-        format!("Sync with upstream {upstream_branch}")
-    } else {
-        format!("Sync with upstream {upstream_branch} (conflicts)")
-    };
+    // The title says what the pull request is, not how it went. Whether it
+    // conflicted is already visible in the body and in the blocked merge
+    // button, and a title that changes between runs makes the same pull
+    // request look like a different one each week.
+    let title = format!("Sync with upstream {upstream_branch}");
 
     let mut body = vec![
         format!("Automated upstream sync from {upstream} ({upstream_branch})."),
@@ -79,14 +85,14 @@ pub fn describe(built: &Built, upstream: &str, upstream_branch: &str, base: &str
         );
         body.push(String::new());
         body.push("```".to_string());
-        body.push("git fetch origin upstream-sync".to_string());
+        body.push(format!("git fetch origin {sync_branch}"));
         // Note the direction. On conflict the branch carries none of the fork's
         // commits, so merging it into the base branch would present every
         // fork-owned change as a deletion.
-        body.push("git checkout -B upstream-sync origin/upstream-sync".to_string());
+        body.push(format!("git checkout -B {sync_branch} origin/{sync_branch}"));
         body.push(format!("git merge origin/{base}"));
         body.push("# resolve, commit, then:".to_string());
-        body.push("git push origin upstream-sync".to_string());
+        body.push(format!("git push origin {sync_branch}"));
         body.push("```".to_string());
         body.push(String::new());
         body.push("Conflicting paths:".to_string());
@@ -140,22 +146,35 @@ mod tests {
             "https://github.com/openai/codex.git",
             "main",
             "main",
+            "upstream-sync",
         );
         assert_eq!(what.title, "Sync with upstream main");
         assert!(what.body.contains("51 new upstream commits."), "{}", what.body);
         assert!(what.body.contains("safe to merge"), "{}", what.body);
     }
 
+    /// The title is the same either way, so a refreshed pull request does not
+    /// look like a new one; the body carries the outcome.
     #[test]
-    fn a_conflicting_sync_says_so_in_the_title_so_it_is_visible_in_a_list() {
-        let what = describe(
+    fn the_title_does_not_change_when_a_sync_conflicts() {
+        let clean = describe(
+            &built(51, Merge::Clean, &[]),
+            "https://github.com/openai/codex.git",
+            "main",
+            "main",
+            "upstream-sync",
+        );
+        let messy = describe(
             &built(51, conflicted(&["src/app.rs"]), &[]),
             "https://github.com/openai/codex.git",
             "main",
             "main",
+            "upstream-sync",
         );
-        assert_eq!(what.title, "Sync with upstream main (conflicts)");
-        assert!(what.body.contains("- `src/app.rs`"), "{}", what.body);
+        assert_eq!(clean.title, messy.title);
+        assert_eq!(messy.title, "Sync with upstream main");
+        assert!(messy.body.contains("- `src/app.rs`"), "{}", messy.body);
+        assert!(messy.body.contains("bare upstream tip"), "{}", messy.body);
     }
 
     /// Getting this backwards discards every fork-owned change, so the
@@ -167,6 +186,7 @@ mod tests {
             "https://example.invalid/up.git",
             "main",
             "canary",
+            "upstream-sync",
         );
         assert!(
             what.body.contains("git merge origin/canary"),
@@ -174,7 +194,7 @@ mod tests {
             what.body
         );
         assert!(
-            !what.body.contains("git merge origin/upstream-sync\n"),
+            !what.body.contains("git merge origin/upstream-sync"),
             "never the other way: {}",
             what.body
         );
@@ -187,8 +207,25 @@ mod tests {
             "https://github.com/Dokploy/dokploy.git",
             "canary",
             "canary",
+            "upstream-sync",
         );
-        assert_eq!(what.title, "Sync with upstream canary (conflicts)");
+        assert_eq!(what.title, "Sync with upstream canary");
+        assert!(what.body.contains("git merge origin/canary"), "{}", what.body);
+    }
+
+    /// The branch name is configurable, so the instructions must not hardcode it.
+    #[test]
+    fn the_resolution_uses_the_configured_sync_branch_name() {
+        let what = describe(
+            &built(1, conflicted(&["x"]), &[]),
+            "https://example.invalid/up.git",
+            "main",
+            "main",
+            "vendor-sync",
+        );
+        assert!(what.body.contains("git fetch origin vendor-sync"), "{}", what.body);
+        assert!(what.body.contains("git push origin vendor-sync"), "{}", what.body);
+        assert!(!what.body.contains("upstream-sync"), "{}", what.body);
     }
 
     #[test]
@@ -198,6 +235,7 @@ mod tests {
             "https://github.com/openai/codex.git",
             "main",
             "main",
+            "upstream-sync",
         );
         assert!(
             what.body.contains("- `.github/workflows/rust-release.yml`"),
@@ -214,6 +252,7 @@ mod tests {
             "https://example.invalid/up.git",
             "main",
             "main",
+            "upstream-sync",
         );
         assert!(what.body.contains("1 new upstream commit."), "{}", what.body);
     }
@@ -227,6 +266,7 @@ mod tests {
             "https://example.invalid/up.git",
             "main",
             "main",
+            "upstream-sync",
         );
         assert!(what.body.contains(&"b".repeat(40)), "{}", what.body);
     }
