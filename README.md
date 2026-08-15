@@ -159,7 +159,60 @@ code and runs git over it. Your mounted config must be readable by that user —
 it holds no secrets, so world-readable is fine, and a config mounted at mode
 `600` from another uid will fail with a permission error.
 
-The token is the only secret, and it is only ever an environment variable.
+### Environment
+
+Secrets are the only thing that comes from the environment. Everything else is
+in `forks.toml`.
+
+| variable | needed | what it is |
+|---|---|---|
+| `WEIR_TOKEN` | **yes** | Forge machine account token, `write:repository` scope. Rename it with `forge.token_env`. |
+| `TELEGRAM_BOT_TOKEN` | only with `[[notify]]` | Bot token from BotFather. Rename with `token_env`. |
+| `TELEGRAM_CHAT_ID` | only with `[[notify]]` | Chat or channel to post to. Rename with `chat_env`. |
+
+Nothing is needed for GitHub. Public upstreams are cloned anonymously; add a
+credential only for a private upstream or if you hit rate limits.
+
+`weir validate` reports which of these are actually set, so a channel that would
+silently stay quiet is visible before you depend on it.
+
+### With docker compose
+
+`weir` exits when it is done, so it is not a service that stays up — use
+`docker compose run`. A full example is in
+[`compose.example.yaml`](compose.example.yaml).
+
+```yaml
+services:
+  weir:
+    image: ghcr.io/walter0697/weir:edge
+    env_file: [weir.env]
+    volumes:
+      - ./forks.toml:/etc/weir/forks.toml:ro
+    command: ["run", "--config", "/etc/weir/forks.toml"]
+```
+
+```console
+$ cat > weir.env <<'EOF'
+WEIR_TOKEN=...
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+EOF
+$ chmod 600 weir.env
+
+$ docker compose run --rm weir run --dry-run     # look first
+$ docker compose run --rm weir run               # do it
+```
+
+An `env_file` keeps the trailing newline that shell substitution strips, so
+`weir` trims the values it reads — a token with a stray newline fails to
+authenticate and says nothing useful about why.
+
+To put it on a schedule, point cron or a systemd timer at the same command:
+
+```cron
+0 5 * * 5  cd /srv/weir && docker compose run --rm weir run >> /var/log/weir.log 2>&1
+```
 
 ## Notifications
 

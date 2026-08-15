@@ -1,0 +1,38 @@
+# weir performs one sync pass and exits, so this is not a service that stays up.
+# Bring it up with `docker compose run`, and let something outside decide when:
+#
+#   docker compose run --rm weir run --dry-run     # look first
+#   docker compose run --rm weir run               # do it
+#   docker compose run --rm weir run --repo codex  # one fork
+#
+# To schedule it, point a cron or systemd timer at the same command:
+#
+#   0 5 * * 5  cd /srv/weir && docker compose run --rm weir run >> /var/log/weir.log 2>&1
+
+services:
+  weir:
+    image: ghcr.io/walter0697/weir:edge
+    # `edge` follows main. Pin a digest or a version tag for anything you would
+    # be annoyed to see change under you.
+
+    # Secrets, and only secrets. Everything else lives in forks.toml.
+    #   WEIR_TOKEN=...            forge machine account, write:repository
+    #   TELEGRAM_BOT_TOKEN=...    optional, only if [[notify]] is configured
+    #   TELEGRAM_CHAT_ID=...      optional, likewise
+    env_file:
+      - weir.env
+
+    volumes:
+      # The container runs as uid 10001, so this file has to be readable by
+      # others. It holds no secrets, which is what makes that safe.
+      - ./forks.toml:/etc/weir/forks.toml:ro
+
+    # The image already defaults to this; stated here so it is obvious what
+    # `docker compose run --rm weir` does with no arguments.
+    command: ["run", "--config", "/etc/weir/forks.toml"]
+
+    # A sync clones an upstream repository and runs git over it. Nothing here
+    # needs to write outside its own workspace or gain privileges.
+    read_only: false
+    security_opt:
+      - no-new-privileges:true
