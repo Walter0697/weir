@@ -77,13 +77,25 @@ pub struct Fork {
     /// `canary`), so neither side may be assumed.
     #[serde(default)]
     pub upstream_branch: Option<String>,
-    /// Paths to delete when they conflict, because the fork removes them on
-    /// purpose and upstream keeps editing them.
+    /// Paths this fork keeps removed, even when upstream edits or re-adds them.
+    ///
+    /// This is *not* "delete anything that conflicts". A modified fork
+    /// conflicts often, and a conflict with no rule here is never resolved
+    /// automatically — it gets an unmergeable pull request and a human. This
+    /// list is the narrow exception: paths the fork deleted deliberately, where
+    /// upstream keeps editing them, so git raises the same delete/modify
+    /// conflict every sync and the answer is the same every time.
+    ///
+    /// Exact paths, never globs. A fork usually keeps its own files beside the
+    /// ones it dropped — a fork that removed upstream's release workflows may
+    /// well keep its own in the same directory — so a glob would quietly eat
+    /// the wrong thing.
     ///
     /// This is the one place the sync exercises judgement, so it is declared
-    /// per fork rather than decided in code.
+    /// per fork rather than decided in code, and every path it removes is
+    /// named in the pull request body.
     #[serde(default)]
-    pub drop_on_conflict: Vec<String>,
+    pub keep_removed: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -253,7 +265,7 @@ branch = "main"
         assert_eq!(config.defaults.sync_branch, "upstream-sync");
         assert_eq!(config.defaults.boundary_file, ".upstream-sync");
         assert_eq!(config.forks.len(), 1);
-        assert!(config.forks[0].drop_on_conflict.is_empty());
+        assert!(config.forks[0].keep_removed.is_empty());
     }
 
     #[test]

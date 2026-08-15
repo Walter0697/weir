@@ -62,9 +62,9 @@ owner = "my-org"
 repo     = "codex"
 upstream = "https://github.com/openai/codex.git"
 branch   = "main"
-# Paths this fork removes on purpose that upstream keeps editing. Deleted on
-# conflict rather than left conflicting, so an otherwise clean sync stays clean.
-drop_on_conflict = [".github/workflows/rust-release.yml"]
+# Paths this fork deleted on purpose that upstream keeps editing. Not a rule
+# for resolving conflicts generally — anything without a rule goes to a human.
+keep_removed = [".github/workflows/rust-release.yml"]
 
 [[fork]]
 repo     = "dokploy"

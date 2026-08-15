@@ -52,8 +52,8 @@ fn validate(path: &std::path::Path) -> Result<()> {
             fork.upstream_branch(),
             fork.branch,
         );
-        for path in &fork.drop_on_conflict {
-            println!("    drops on conflict: {path}");
+        for path in &fork.keep_removed {
+            println!("    keeps removed: {path}");
         }
     }
     Ok(())
