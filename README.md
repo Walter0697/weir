@@ -136,12 +136,20 @@ a schedule can run it — cron, a systemd timer, a CI job, a Kubernetes CronJob.
 There is deliberately no scheduler inside.
 
 ```console
+$ export WEIR_TOKEN=...
 $ docker run --rm \
     -v /etc/weir/forks.toml:/etc/weir/forks.toml:ro \
     -e WEIR_TOKEN \
     ghcr.io/walter0697/weir:latest \
     run --config /etc/weir/forks.toml
 ```
+
+Pass the token as `-e WEIR_TOKEN` with **no value**, so docker forwards it by
+name. Writing `-e WEIR_TOKEN="$(cat …)"` puts the secret in the docker client's
+own argument list, where `ps` will show it to every user on the host.
+
+Images are published to `ghcr.io/walter0697/weir` on each `v*` tag, tagged
+`{version}`, `{major}.{minor}`, and `latest`.
 
 The image runs as an unprivileged user (uid 10001), because it clones upstream
 code and runs git over it. Your mounted config must be readable by that user —

@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # So the release workflow can run the same checks before publishing anything.
+  workflow_call:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,6 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      # Built but not pushed: this only proves the Dockerfile still works.
+      # Built but not pushed: this only proves the Dockerfile still works, so a
+      # broken one is caught on the pull request rather than at release time.
       - run: docker build -t weir:ci .
       - run: docker run --rm weir:ci --version
