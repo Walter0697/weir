@@ -52,19 +52,22 @@ modified, nothing quite fits:
 
 | | |
 |---|---|
-| **Gitea "merge upstream" / Forgejo "sync fork"** | Writes straight to your branch, no review. Requires the parent to be a repo on the same instance, so a GitHub upstream is out. Errors on conflict. |
+| **Gitea "merge upstream" / Forgejo "sync fork"** | Merges straight into your branch, producing no pull request — nothing to read before it lands, and nothing for other automation to act on. Requires the parent to be a repo on the *same instance*, so a GitHub upstream cannot use it at all. On a conflict it errors and leaves you with nothing. |
 | **Pull mirrors** | Force-overwrite by design. They will erase your changes. |
 | **`gh repo sync`** | Fast-forward only. Dies the moment you have your own commits, and GitHub-only. |
 | **`wei/pull`** | Opens pull requests, which is right — but it is a GitHub App and cannot talk to a self-hosted forge. |
 | **Copybara** | Built for rule-based transformation between repositories, not hand-written divergence, and has no self-hosted forge destination. |
 | **Renovate / Dependabot** | Bump dependency versions inside a repo. No concept of an upstream project; cannot sync a fork at all. |
 
-The gap is the combination: **a pull request gate, against a self-hosted
-forge.** Everything forge-native skips review; the two tools that do review are
-GitHub-only.
+The gap is the combination: **a pull request, against a self-hosted forge.**
+Everything forge-native merges without producing one; the two tools that do open
+pull requests are GitHub-only.
 
-`weir` does not resolve conflicts. When a merge conflicts it says so and hands
-you a branch to finish by hand. Judgement is not a feature anyone ships.
+To be clear about what that buys, since it is easy to overstate: `weir` does not
+review anything and does not resolve conflicts. It produces the thing a reviewer
+works on — a branch and a pull request, with the outcome described — and then
+stops. Whether a person reads it, a bot comments on it, or it sits there for a
+week is not its business. Judgement is not a feature anyone ships.
 
 | situation | what happens |
 |---|---|
