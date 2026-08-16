@@ -9,6 +9,7 @@
 //! that reaches it can change which repositories get force-pushed. Put it
 //! behind whatever already fronts your other services if you want it elsewhere.
 
+mod auth;
 mod pages;
 
 use crate::forge::Forge;
@@ -37,6 +38,7 @@ pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
     let scheduler = app.clone();
     tokio::spawn(async move { schedule_loop(scheduler).await });
 
+    let gate = auth::Auth::from_env();
     let router = Router::new()
         .route("/", get(pages::dashboard))
         .route("/settings", get(pages::settings).post(save_settings))
@@ -53,18 +55,27 @@ pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
         .route("/forks/{id}/delete", post(delete_fork))
         .route("/run", post(trigger_run))
         .route("/runs/{id}", get(pages::run_detail))
-        .with_state(app);
+        .with_state(app)
+        .route("/login", get(auth::login_page).post(auth::login))
+        .layer(axum::middleware::from_fn_with_state(
+            gate.clone(),
+            auth::guard,
+        ))
+        .with_state(gate.clone());
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("binding {addr}"))?;
     println!("weir: listening on http://{addr}");
-    if !addr.ip().is_loopback() {
-        println!(
-            "weir: WARNING — bound to {}, which is not loopback. Anything that can reach \
-             this can change which repositories get force-pushed.",
+    match (addr.ip().is_loopback(), gate.required()) {
+        (true, false) => println!("weir: loopback only, so no access token is required"),
+        (_, true) => println!("weir: an access token is required (WEIR_UI_TOKEN)"),
+        (false, false) => println!(
+            "weir: WARNING — bound to {} with no access token. Anything that can reach this \
+             can change which repositories get force-pushed and trigger runs. Set WEIR_UI_TOKEN, \
+             or publish it to 127.0.0.1 only.",
             addr.ip()
-        );
+        ),
     }
     axum::serve(listener, router)
         .await

@@ -260,9 +260,30 @@ sync would do, or **Sync all** to do it. Every run is kept with its full output,
 so you can read last Friday's without having been watching.
 
 **Loopback by default, on purpose.** Anything that can reach this can change
-which repositories get force-pushed. Put it behind whatever already fronts your
-other services rather than binding it to the world; it warns at startup if you
-do the latter.
+which repositories get force-pushed.
+
+To reach it from elsewhere, set `WEIR_UI_TOKEN` and bind wider:
+
+```console
+$ WEIR_UI_TOKEN=$(head -c 18 /dev/urandom | base64) weir serve --bind 0.0.0.0:8080
+weir: listening on http://0.0.0.0:8080
+weir: an access token is required (WEIR_UI_TOKEN)
+```
+
+One token, entered once, kept in an `HttpOnly` cookie. There are no accounts
+because there is nothing to distinguish between — everyone who gets in can do
+everything. Comparison is constant-time, so a near miss costs the same as a
+wild guess.
+
+Without the variable it stays open, and binding to anything other than loopback
+then prints a warning at startup naming exactly what is exposed. Behind a
+reverse proxy that already authenticates, leaving it open is reasonable; on a
+LAN it is not.
+
+Note the cookie is not marked `Secure`, because this is usually served over
+plain HTTP on a home network and a `Secure` cookie would never be stored. That
+also means the token crosses that network in the clear — put it behind TLS if
+that matters to you.
 
 **The database holds your forge token**, so treat the volume as a secret. It is
 created mode 0600, never rendered back to the browser, and never written to the
