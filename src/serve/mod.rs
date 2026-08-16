@@ -16,7 +16,8 @@ use crate::forge::Forge;
 use crate::git::Cancel;
 use crate::notify::{self, Notifier};
 use crate::runner::{self, ForgeSpec, ForkSpec, Options};
-use crate::store::{Fork, NewConnection, NewFork, Settings, Store};
+use crate::store::{Fork, NewConnection, NewFork, NewWatch, Settings, Store, Watch};
+use crate::watch::{self, Skipped};
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Redirect};
@@ -59,6 +60,9 @@ pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
         .route("/forks", post(create_fork))
         .route("/forks/{id}", get(pages::edit_fork).post(update_fork))
         .route("/forks/{id}/delete", post(delete_fork))
+        .route("/watches", get(pages::watches).post(create_watch))
+        .route("/watches/{id}", post(update_watch))
+        .route("/watches/{id}/delete", post(delete_watch))
         .route("/run", post(trigger_run))
         .route("/cancel", post(cancel_run))
         .route("/runs/{id}", get(pages::run_detail))
@@ -99,7 +103,7 @@ impl App {
     ///
     /// Resolved per fork rather than globally, which is what lets two forks sit
     /// on different forges, or under different owners on the same one.
-    fn forge_spec(&self, fork: &Fork) -> Result<ForgeSpec> {
+    fn forge_spec(&self, fork: &Planned) -> Result<ForgeSpec> {
         let connection = self
             .store
             .connection(fork.connection_id)?
@@ -138,7 +142,7 @@ impl App {
 
     /// Runs one fork and records it. Blocking on purpose — the git and HTTP
     /// work underneath is blocking, so it must never run on the async runtime.
-    fn sync_one_blocking(&self, fork: crate::store::Fork, dry_run: bool, cancel: &Cancel) {
+    fn sync_one_blocking(&self, fork: Planned, dry_run: bool, cancel: &Cancel) {
         let run_id = match self.store.start_run(&fork.repo, dry_run) {
             Ok(id) => id,
             Err(error) => {
@@ -191,6 +195,120 @@ impl App {
             }
         }
     }
+}
+
+/// One repository a run will actually touch, however it got there.
+#[derive(Debug, Clone)]
+pub struct Planned {
+    pub connection_id: i64,
+    pub owner: String,
+    pub repo: String,
+    pub upstream: String,
+    pub branch: String,
+    pub upstream_branch: Option<String>,
+    pub keep_removed: Vec<String>,
+}
+
+impl From<Fork> for Planned {
+    fn from(fork: Fork) -> Self {
+        Self {
+            connection_id: fork.connection_id,
+            owner: fork.owner,
+            repo: fork.repo,
+            upstream: fork.upstream,
+            branch: fork.branch,
+            upstream_branch: fork.upstream_branch,
+            keep_removed: fork.keep_removed,
+        }
+    }
+}
+
+/// What a watch currently covers, and what it leaves alone and why.
+pub struct Expansion {
+    pub covered: Vec<Planned>,
+    pub skipped: Vec<(String, Skipped)>,
+}
+
+/// Expands one watch against the forge as it is right now.
+///
+/// Deliberately not cached: the whole point of a watch is that it notices a
+/// repository nobody told it about, and a cached answer would not.
+pub fn expand(app: &App, watch: &Watch) -> Result<Expansion> {
+    let connection = app
+        .store
+        .connection(watch.connection_id)?
+        .context("that watch points at a connection that no longer exists")?;
+    let token = app
+        .store
+        .connection_token(watch.connection_id)?
+        .context("that connection has no token, so the forge cannot be listed")?;
+    let gitea = crate::forge::gitea::Gitea::new(&connection.url, &watch.owner, &token)?;
+
+    let configured: Vec<String> = app
+        .store
+        .forks()?
+        .into_iter()
+        .filter(|f| f.connection_id == watch.connection_id && f.owner == watch.owner)
+        .map(|f| f.repo)
+        .collect();
+
+    let mut covered = Vec::new();
+    let mut skipped = Vec::new();
+    for repo in gitea.discover()? {
+        if let Some(pattern) = watch
+            .except
+            .iter()
+            .find(|p| watch::excluded(&repo.name, std::slice::from_ref(p)))
+        {
+            skipped.push((repo.name, Skipped::Excepted(pattern.clone())));
+            continue;
+        }
+        // A hand-written fork wins, so watching an owner and tuning one of its
+        // repositories are not in competition.
+        if configured.contains(&repo.name) {
+            skipped.push((repo.name, Skipped::ConfiguredSeparately));
+            continue;
+        }
+        let Some(upstream) = repo.upstream else {
+            skipped.push((repo.name, Skipped::NoUpstream));
+            continue;
+        };
+        covered.push(Planned {
+            connection_id: watch.connection_id,
+            owner: watch.owner.clone(),
+            repo: repo.name,
+            upstream,
+            branch: repo.default_branch,
+            upstream_branch: None,
+            keep_removed: Vec::new(),
+        });
+    }
+    Ok(Expansion { covered, skipped })
+}
+
+/// Everything a run should touch: the forks written down, plus whatever the
+/// watches cover right now.
+pub fn planned(app: &App, only: Option<&str>) -> Result<Vec<Planned>> {
+    let mut targets: Vec<Planned> = app
+        .store
+        .forks()?
+        .into_iter()
+        .filter(|f| f.enabled)
+        .map(Planned::from)
+        .collect();
+
+    for watch in app.store.watches()?.into_iter().filter(|w| w.enabled) {
+        match expand(app, &watch) {
+            Ok(expansion) => targets.extend(expansion.covered),
+            // A watch that cannot be listed must not stop the forks that can.
+            Err(error) => eprintln!("weir: could not expand {}: {error:#}", watch.owner),
+        }
+    }
+
+    Ok(match only {
+        Some(name) => targets.into_iter().filter(|t| t.repo == name).collect(),
+        None => targets,
+    })
 }
 
 #[derive(Deserialize)]
@@ -466,6 +584,64 @@ fn check_fork(app: &App, fork: &NewFork) -> Option<String> {
 }
 
 #[derive(Deserialize)]
+pub struct WatchForm {
+    connection_id: i64,
+    owner: String,
+    except: String,
+    #[serde(default)]
+    enabled: Option<String>,
+}
+
+impl WatchForm {
+    fn into_new(self) -> NewWatch {
+        NewWatch {
+            connection_id: self.connection_id,
+            owner: self.owner.trim().to_string(),
+            except: self
+                .except
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect(),
+            enabled: self.enabled.is_some(),
+        }
+    }
+}
+
+async fn create_watch(
+    State(app): State<App>,
+    axum::Form(form): axum::Form<WatchForm>,
+) -> impl IntoResponse {
+    let new = form.into_new();
+    if new.owner.is_empty() {
+        return pages::error_page("That watch cannot be added", "The owner is empty.");
+    }
+    match app.store.add_watch(&new) {
+        Ok(_) => Redirect::to("/watches").into_response(),
+        Err(error) => pages::error_page("Could not add the watch", &format!("{error:#}")),
+    }
+}
+
+async fn update_watch(
+    State(app): State<App>,
+    Path(id): Path<i64>,
+    axum::Form(form): axum::Form<WatchForm>,
+) -> impl IntoResponse {
+    match app.store.update_watch(id, &form.into_new()) {
+        Ok(()) => Redirect::to("/watches").into_response(),
+        Err(error) => pages::error_page("Could not save the watch", &format!("{error:#}")),
+    }
+}
+
+async fn delete_watch(State(app): State<App>, Path(id): Path<i64>) -> impl IntoResponse {
+    match app.store.delete_watch(id) {
+        Ok(()) => Redirect::to("/watches").into_response(),
+        Err(error) => pages::error_page("Could not remove the watch", &format!("{error:#}")),
+    }
+}
+
+#[derive(Deserialize)]
 pub struct RunRequest {
     #[serde(default)]
     repo: Option<String>,
@@ -478,15 +654,14 @@ async fn trigger_run(
     axum::Form(request): axum::Form<RunRequest>,
 ) -> impl IntoResponse {
     let dry_run = request.dry_run.is_some();
-    let forks = match app.store.forks() {
-        Ok(forks) => forks,
-        Err(error) => return pages::error_page("Could not read the forks", &format!("{error:#}")),
+    // Watches are expanded here rather than stored, so a repository added to
+    // the forge since the last run is included without anyone doing anything.
+    let selected = match planned(&app, request.repo.as_deref()) {
+        Ok(targets) => targets,
+        Err(error) => {
+            return pages::error_page("Could not work out what to sync", &format!("{error:#}"))
+        }
     };
-    let selected: Vec<_> = forks
-        .into_iter()
-        .filter(|f| f.enabled)
-        .filter(|f| request.repo.as_deref().is_none_or(|r| r == f.repo))
-        .collect();
 
     // A fresh flag per batch, so pressing stop on one run cannot silently kill
     // the next one somebody starts.
@@ -601,7 +776,7 @@ async fn schedule_loop(app: App) {
         }
         last_fired = stamp;
 
-        let Ok(forks) = app.store.forks() else {
+        let Ok(forks) = planned(&app, None) else {
             continue;
         };
         let cancel = Cancel::new();
@@ -610,7 +785,7 @@ async fn schedule_loop(app: App) {
             .expect("the cancel lock is never poisoned") = cancel.clone();
         let worker = app.clone();
         tokio::task::spawn_blocking(move || {
-            for fork in forks.into_iter().filter(|f| f.enabled) {
+            for fork in forks {
                 if cancel.is_cancelled() {
                     break;
                 }

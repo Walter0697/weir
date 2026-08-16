@@ -101,6 +101,25 @@ pub struct NewFork {
 }
 
 /// One entry in the audit trail: when, what changed, and both values.
+/// A rule covering every repository under one owner, expanded fresh each run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Watch {
+    pub id: i64,
+    pub connection_id: i64,
+    pub owner: String,
+    /// Names or `*` patterns that this watch does not cover.
+    pub except: Vec<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewWatch {
+    pub connection_id: i64,
+    pub owner: String,
+    pub except: Vec<String>,
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
     pub at: String,
@@ -189,6 +208,18 @@ impl Store {
                 upstream_branch TEXT,
                 keep_removed    TEXT NOT NULL DEFAULT '',
                 enabled         INTEGER NOT NULL DEFAULT 1
+            );
+
+            -- Watching an owner rather than listing its repositories. Expanded
+            -- at run time, so a repository added to the forge later is covered
+            -- without anyone editing configuration.
+            CREATE TABLE IF NOT EXISTS watches (
+                id            INTEGER PRIMARY KEY,
+                connection_id INTEGER NOT NULL,
+                owner         TEXT NOT NULL,
+                except_list   TEXT NOT NULL DEFAULT '',
+                enabled       INTEGER NOT NULL DEFAULT 1,
+                UNIQUE (connection_id, owner)
             );
 
             CREATE TABLE IF NOT EXISTS runs (
@@ -573,6 +604,98 @@ impl Store {
         }
         if let Some(before) = before {
             self.record("fork removed", Some(&before.repo), None)?;
+        }
+        Ok(())
+    }
+
+    pub fn watches(&self) -> Result<Vec<Watch>> {
+        let conn = self.conn.lock().expect("the store lock is never poisoned");
+        let mut statement = conn.prepare(
+            "SELECT id, connection_id, owner, except_list, enabled FROM watches ORDER BY owner",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(Watch {
+                    id: row.get(0)?,
+                    connection_id: row.get(1)?,
+                    owner: row.get(2)?,
+                    except: split_paths(&row.get::<_, String>(3)?),
+                    enabled: row.get::<_, i64>(4)? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn watch(&self, id: i64) -> Result<Option<Watch>> {
+        Ok(self.watches()?.into_iter().find(|w| w.id == id))
+    }
+
+    pub fn add_watch(&self, watch: &NewWatch) -> Result<i64> {
+        let id = {
+            let conn = self.conn.lock().expect("the store lock is never poisoned");
+            conn.execute(
+                "INSERT INTO watches (connection_id, owner, except_list, enabled)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    watch.connection_id,
+                    watch.owner,
+                    watch.except.join("\n"),
+                    watch.enabled as i64,
+                ],
+            )
+            .with_context(|| format!("watching {:?}", watch.owner))?;
+            conn.last_insert_rowid()
+        };
+        self.record("watch added", None, Some(&watch.owner))?;
+        Ok(id)
+    }
+
+    pub fn update_watch(&self, id: i64, watch: &NewWatch) -> Result<()> {
+        let before = self.watch(id)?;
+        {
+            let conn = self.conn.lock().expect("the store lock is never poisoned");
+            conn.execute(
+                "UPDATE watches SET connection_id = ?1, owner = ?2, except_list = ?3, enabled = ?4
+                 WHERE id = ?5",
+                params![
+                    watch.connection_id,
+                    watch.owner,
+                    watch.except.join("\n"),
+                    watch.enabled as i64,
+                    id,
+                ],
+            )?;
+        }
+        // The exception list decides what a watch does *not* touch, so a change
+        // to it is worth a line in the trail.
+        if let Some(before) = before {
+            if before.except != watch.except {
+                self.record(
+                    &format!("{} exceptions", watch.owner),
+                    Some(&before.except.join(", ")),
+                    Some(&watch.except.join(", ")),
+                )?;
+            }
+            if before.enabled != watch.enabled {
+                self.record(
+                    &format!("{} watch enabled", watch.owner),
+                    Some(&before.enabled.to_string()),
+                    Some(&watch.enabled.to_string()),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn delete_watch(&self, id: i64) -> Result<()> {
+        let before = self.watch(id)?;
+        {
+            let conn = self.conn.lock().expect("the store lock is never poisoned");
+            conn.execute("DELETE FROM watches WHERE id = ?1", params![id])?;
+        }
+        if let Some(before) = before {
+            self.record("watch removed", Some(&before.owner), None)?;
         }
         Ok(())
     }

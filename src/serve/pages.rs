@@ -136,6 +136,7 @@ fn shell(title: &str, current: &str, body: Markup) -> Markup {
                 header { div class="bar" {
                     h1 { "weir" }
                     a href="/" class=(if current == "home" { "on" } else { "" }) { "Forks" }
+                    a href="/watches" class=(if current == "watches" { "on" } else { "" }) { "Watches" }
                     a href="/connections" class=(if current == "connections" { "on" } else { "" }) { "Connections" }
                     a href="/settings" class=(if current == "settings" { "on" } else { "" }) { "Settings" }
                 }}
@@ -774,5 +775,164 @@ fn fork_fields(fork: Option<&Fork>, connections: &[crate::store::Connection]) ->
             }
             div style="margin-top:1rem" { button class="primary" type="submit" { "Save" } }
         }
+    }
+}
+
+pub async fn watches(State(app): State<App>) -> impl IntoResponse {
+    let connections = app.store().connections().unwrap_or_default();
+    let watches = app.store().watches().unwrap_or_default();
+
+    // Expanded live, off the async runtime, because the forge client blocks.
+    // A watch whose effect you cannot see is a watch you cannot trust, so this
+    // page pays the cost of asking rather than showing the rule alone.
+    let previews = {
+        let app = app.clone();
+        let watches = watches.clone();
+        tokio::task::spawn_blocking(move || {
+            watches
+                .iter()
+                .map(|watch| super::expand(&app, watch))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default()
+    };
+
+    Html(
+        shell(
+            "watches",
+            "watches",
+            html! {
+                h2 { "Watches" }
+                p class="small muted" {
+                    "A watch covers every repository under an owner, worked out fresh on each run — "
+                    "so something added to the forge next week is included without anyone editing "
+                    "anything. A fork configured by hand wins over the watch, which is how one "
+                    "repository keeps its own settings while the rest are covered by the rule."
+                }
+
+                @if connections.is_empty() {
+                    div class="note" {
+                        "Add a " a href="/connections" { "connection" } " first."
+                    }
+                }
+
+                @for (index, watch) in watches.iter().enumerate() {
+                    @let preview = previews.get(index);
+                    details {
+                        summary {
+                            strong { (watch.owner) }
+                            @match preview {
+                                Some(Ok(expansion)) => {
+                                    span class="muted small" {
+                                        " — covers " (expansion.covered.len()) " repo(s)"
+                                    }
+                                    @if !expansion.skipped.is_empty() {
+                                        span class="muted small" { ", skips " (expansion.skipped.len()) }
+                                    }
+                                }
+                                Some(Err(_)) => span class="warn small" { " — could not be listed" },
+                                None => span class="muted small" { " — not checked" },
+                            }
+                            @if !watch.enabled { " " span class="pill muted" { "disabled" } }
+                        }
+                        div class="details-body" {
+                            @match preview {
+                                Some(Ok(expansion)) => {
+                                    @if expansion.covered.is_empty() && expansion.skipped.is_empty() {
+                                        p class="small muted" { "Nothing visible under that owner." }
+                                    }
+                                    @if !expansion.covered.is_empty() {
+                                        p class="small" { "Syncs now:" }
+                                        table { tbody { @for target in &expansion.covered {
+                                            tr {
+                                                td { (target.repo) }
+                                                td class="mono small" { (target.branch) }
+                                                td class="mono small muted" { (target.upstream) }
+                                            }
+                                        }}}
+                                    }
+                                    @if !expansion.skipped.is_empty() {
+                                        p class="small muted" { "Leaves alone:" }
+                                        table { tbody { @for (name, why) in &expansion.skipped {
+                                            tr {
+                                                td class="muted" { (name) }
+                                                td class="small muted" { (why.reason()) }
+                                                td {}
+                                            }
+                                        }}}
+                                    }
+                                }
+                                Some(Err(error)) => div class="note small" { (format!("{error:#}")) }
+                                None => {}
+                            }
+
+                            form method="post" action={ "/watches/" (watch.id) } {
+                                (watch_fields(Some(watch), &connections))
+                                button class="primary" type="submit" { "Save" }
+                            }
+                            form method="post" action={ "/watches/" (watch.id) "/delete" }
+                                 style="margin-top:.75rem" {
+                                button class="danger" type="submit" { "Remove" }
+                                span class="small muted" {
+                                    " — stops covering that owner. Forks configured by hand stay."
+                                }
+                            }
+                        }
+                    }
+                }
+
+                @if !connections.is_empty() {
+                    h2 { "Watch an owner" }
+                    form method="post" action="/watches" {
+                        div class="card" {
+                            (watch_fields(None, &connections))
+                            button class="primary" type="submit" { "Add" }
+                        }
+                    }
+                }
+            },
+        )
+        .into_string(),
+    )
+}
+
+fn watch_fields(
+    watch: Option<&crate::store::Watch>,
+    connections: &[crate::store::Connection],
+) -> Markup {
+    let owner = watch.map(|w| w.owner.clone()).unwrap_or_default();
+    let except = watch.map(|w| w.except.join("\n")).unwrap_or_default();
+    let enabled = watch.map(|w| w.enabled).unwrap_or(true);
+    let chosen = watch.map(|w| w.connection_id);
+
+    html! {
+        div class="grid2" {
+            div {
+                label { "Connection" }
+                select name="connection_id" {
+                    @for connection in connections {
+                        option value=(connection.id) selected[Some(connection.id) == chosen] {
+                            (connection.name)
+                        }
+                    }
+                }
+            }
+            div {
+                label { "Owner " span class="muted" { "(user or organisation)" } }
+                input type="text" name="owner" value=(owner) placeholder="my-org";
+            }
+        }
+        label { "Exceptions " span class="muted" { "(one per line; * matches any run of characters)" } }
+        textarea name="except" placeholder="archived-thing&#10;test-*" { (except) }
+        p class="small muted" {
+            "Anything matching is left alone. A bare " code { "*" } " excepts everything, which is "
+            "one way to pause a watch without losing what you wrote."
+        }
+        label class="row small" style="margin-top:.75rem" {
+            input type="checkbox" name="enabled" value="1" checked[enabled] style="width:auto";
+            " Include this watch when syncing"
+        }
+        div style="margin-top:1rem" {}
     }
 }

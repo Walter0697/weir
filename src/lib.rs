@@ -14,3 +14,4 @@ pub mod runner;
 pub mod serve;
 pub mod store;
 pub mod sync;
+pub mod watch;

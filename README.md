@@ -269,6 +269,33 @@ Stopping is always safe. Every run rebuilds its branch from scratch, so a sync
 that was interrupted after pushing leaves a branch the next run simply replaces,
 and one interrupted before pushing leaves nothing at all.
 
+### Watching an owner
+
+Listing repositories one at a time stops being reasonable somewhere around the
+fifth. A **watch** covers everything under one owner and is worked out fresh on
+every run, so a repository added to the forge next week is included without
+anyone editing anything.
+
+Three things narrow it, and the page shows all three rather than applying them
+quietly — a rule whose effect you cannot see is a rule you cannot trust:
+
+```
+walter-opensource — covers 1 repo(s), skips 3
+
+  syncs now:     dokploy (canary)
+  leaves alone:  codex          — configured as its own fork
+                 renovate-bot   — no upstream recorded on the forge
+                 renovate-config — no upstream recorded on the forge
+```
+
+- **Exceptions** you write. Names, or `*` patterns like `test-*`. A bare `*`
+  excepts everything, which pauses a watch without losing what you wrote.
+- **Forks configured by hand win.** That is how one repository keeps its own
+  `keep_removed` or a different upstream branch while the rest are covered by
+  the rule.
+- **No recorded upstream, no sync.** There is nothing to sync *from*, so it is
+  skipped and said out loud.
+
 **Loopback by default, on purpose.** Anything that can reach this can change
 which repositories get force-pushed.
 
