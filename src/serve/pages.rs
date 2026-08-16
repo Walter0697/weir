@@ -24,11 +24,16 @@ const STYLE: &str = r#"
 body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
 main { max-width: 62rem; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
 header { border-bottom:1px solid var(--line); }
-header .bar { max-width:62rem; margin:0 auto; padding:.9rem 1.25rem; display:flex; gap:1.25rem; align-items:baseline; }
+/* Centre, not baseline. Baseline was right while the bar was only text; with
+   an image in it, baseline aligns the image's bottom edge to the text baseline
+   and drops it below the links. */
+header .bar { max-width:62rem; margin:0 auto; padding:.85rem 1.25rem; display:flex;
+  gap:1.25rem; align-items:center; }
+header .bar a { line-height:1; }
 header a { color:var(--fg); text-decoration:none; opacity:.7; }
 header a:hover, header a.on { opacity:1; }
 h1 { font-size:1.05rem; margin:0; letter-spacing:.02em; }
-.brand { display:flex; align-items:center; gap:.55rem; margin-right:1rem; opacity:1; }
+.brand { display:flex; align-items:center; gap:.55rem; margin-right:.75rem; opacity:1; }
 .brand img { border-radius:6px; display:block; }
 .brand:hover { opacity:1; }
 h2 { font-size:.95rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:2rem 0 .75rem; }
