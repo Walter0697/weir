@@ -784,6 +784,24 @@ pub async fn edit_fork(State(app): State<App>, Path(id): Path<i64>) -> impl Into
                 "home",
                 html! {
                     h2 { (fork.owner) "/" (fork.repo) }
+                    div class="card row" {
+                        @if let Some(connection) = connections.iter().find(|c| c.id == fork.connection_id) {
+                            a class="btn" target="_blank" rel="noreferrer"
+                               href=(super::mirrored_url(&connection.url, &fork.owner, &fork.repo)) {
+                                "Mirrored page ↗"
+                            }
+                        }
+                        a class="btn" target="_blank" rel="noreferrer"
+                           href=(super::browse_url(&fork.upstream)) { "Source page ↗" }
+                        form method="post" action="/run" style="display:inline" {
+                            input type="hidden" name="repo" value=(fork.repo);
+                            input type="hidden" name="dry_run" value="1";
+                            button type="submit" { "Dry run" }
+                        }
+                        span class="small muted" {
+                            "Mirrored is your copy on the forge; source is what it syncs from."
+                        }
+                    }
                     form method="post" action={ "/forks/" (fork.id) } { (fork_fields(Some(&fork), &connections)) }
                     div class="card" {
                         form method="post" action={ "/forks/" (fork.id) "/delete" } {
@@ -1172,6 +1190,14 @@ pub async fn repo_detail(
                         }
                     }}
                     div class="row" style="margin-top:1rem" {
+                        @if let Ok(Some(connection)) = app.store().connection(target.connection_id) {
+                            a class="btn" target="_blank" rel="noreferrer"
+                               href=(super::mirrored_url(&connection.url, &target.owner, &target.repo)) {
+                                "Mirrored page ↗"
+                            }
+                        }
+                        a class="btn" target="_blank" rel="noreferrer"
+                           href=(super::browse_url(&target.upstream)) { "Source page ↗" }
                         form method="post" action="/run" style="display:inline" {
                             input type="hidden" name="repo" value=(target.repo);
                             input type="hidden" name="dry_run" value="1";

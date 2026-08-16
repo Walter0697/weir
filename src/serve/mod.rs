@@ -856,6 +856,24 @@ pub fn discover(
         .collect())
 }
 
+/// Where to look at a repository in a browser.
+///
+/// The upstream is stored as a clone URL because that is what git needs; a
+/// person wants the page. Stripping `.git` is the whole conversion for every
+/// forge people migrate from, and an address that is already a browse URL is
+/// left alone.
+pub fn browse_url(clone_url: &str) -> String {
+    clone_url
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .to_string()
+}
+
+/// The fork's own page on the forge it lives on.
+pub fn mirrored_url(connection_url: &str, owner: &str, repo: &str) -> String {
+    format!("{}/{owner}/{repo}", connection_url.trim_end_matches('/'))
+}
+
 pub fn parse_cron(expression: &str) -> std::result::Result<croner::Cron, String> {
     croner::Cron::new(expression)
         .parse()
@@ -924,6 +942,38 @@ pub type DiscoverParams = Query<DiscoverQuery>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_clone_url_becomes_a_page_you_can_open() {
+        assert_eq!(
+            browse_url("https://github.com/openai/codex.git"),
+            "https://github.com/openai/codex"
+        );
+    }
+
+    #[test]
+    fn an_address_that_is_already_a_page_is_left_alone() {
+        assert_eq!(
+            browse_url("https://github.com/openai/codex"),
+            "https://github.com/openai/codex"
+        );
+    }
+
+    #[test]
+    fn a_trailing_slash_does_not_survive_into_the_link() {
+        assert_eq!(
+            browse_url("https://github.com/openai/codex.git/"),
+            "https://github.com/openai/codex"
+        );
+    }
+
+    #[test]
+    fn the_mirrored_page_is_the_forge_plus_owner_and_repo() {
+        assert_eq!(
+            mirrored_url("https://gitea.example/", "org", "codex"),
+            "https://gitea.example/org/codex"
+        );
+    }
 
     #[test]
     fn a_valid_cron_expression_is_accepted() {
