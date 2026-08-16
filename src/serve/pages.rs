@@ -885,10 +885,10 @@ pub async fn watches(State(app): State<App>) -> impl IntoResponse {
                                                             }
                                                         }
                                                         Skipped::ConfiguredSeparately => {
-                                                            span class="small muted" { "see Forks" }
+                                                            a class="small" href="/" { "see Forks" }
                                                         }
                                                         Skipped::NoUpstream => {
-                                                            span class="small muted" { "add it by hand" }
+                                                            a class="small" href="/forks/new" { "add it by hand" }
                                                         }
                                                     }
                                                 }
@@ -898,6 +898,38 @@ pub async fn watches(State(app): State<App>) -> impl IntoResponse {
                                 }
                                 Some(Err(error)) => div class="note small" { (format!("{error:#}")) }
                                 None => {}
+                            }
+
+                            p class="small" { "Exceptions:" }
+                            div class="card" {
+                                @if watch.except.is_empty() {
+                                    p class="small muted" { "None — this watch covers everything it can." }
+                                } @else {
+                                    table { tbody { @for pattern in &watch.except {
+                                        tr {
+                                            td class="mono small" { (pattern) }
+                                            td class="small muted" {
+                                                @if pattern.contains('*') { "pattern" } @else { "exact name" }
+                                            }
+                                            td {
+                                                form method="post"
+                                                     action={ "/watches/" (watch.id) "/include" } {
+                                                    input type="hidden" name="repo" value=(pattern);
+                                                    button type="submit" { "Remove" }
+                                                }
+                                            }
+                                        }
+                                    }}}
+                                }
+                                // Listed here as well as offered on the rows, because an exception
+                                // for something that is not on the forge appears in no other list
+                                // — and an entry you cannot see is one you cannot remove.
+                                form method="post" action={ "/watches/" (watch.id) "/except" }
+                                     class="row" style="margin-top:.75rem" {
+                                    input type="text" name="repo" placeholder="name or pattern, e.g. test-*"
+                                          style="flex:1";
+                                    button type="submit" { "Add" }
+                                }
                             }
 
                             form method="post" action={ "/watches/" (watch.id) } {
@@ -956,11 +988,17 @@ fn watch_fields(
                 input type="text" name="owner" value=(owner) placeholder="my-org";
             }
         }
-        label { "Exceptions " span class="muted" { "(one per line; * matches any run of characters)" } }
-        textarea name="except" placeholder="archived-thing&#10;test-*" { (except) }
-        p class="small muted" {
-            "Anything matching is left alone. A bare " code { "*" } " excepts everything, which is "
-            "one way to pause a watch without losing what you wrote."
+        @if watch.is_none() {
+            label { "Exceptions " span class="muted" { "(one per line; * matches any run of characters)" } }
+            textarea name="except" placeholder="archived-thing&#10;test-*" { (except) }
+            p class="small muted" {
+                "Anything matching is left alone. A bare " code { "*" } " excepts everything, which "
+                "is one way to pause a watch without losing what you wrote."
+            }
+        } @else {
+            // Edited through the list above, so the form carries the current
+            // value rather than offering a second place to change it.
+            input type="hidden" name="except" value=(except);
         }
         label class="row small" style="margin-top:.75rem" {
             input type="checkbox" name="enabled" value="1" checked[enabled] style="width:auto";
