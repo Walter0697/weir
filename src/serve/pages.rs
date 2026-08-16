@@ -8,6 +8,7 @@
 
 use super::{discover, App};
 use crate::store::{Fork, Run};
+use crate::watch::Skipped;
 use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse, Response};
 use maud::{html, Markup, DOCTYPE};
@@ -849,6 +850,12 @@ pub async fn watches(State(app): State<App>) -> impl IntoResponse {
                                                 td { (target.repo) }
                                                 td class="mono small" { (target.branch) }
                                                 td class="mono small muted" { (target.upstream) }
+                                                td {
+                                                    form method="post" action={ "/watches/" (watch.id) "/except" } {
+                                                        input type="hidden" name="repo" value=(target.repo);
+                                                        button type="submit" { "Leave alone" }
+                                                    }
+                                                }
                                             }
                                         }}}
                                     }
@@ -858,7 +865,33 @@ pub async fn watches(State(app): State<App>) -> impl IntoResponse {
                                             tr {
                                                 td class="muted" { (name) }
                                                 td class="small muted" { (why.reason()) }
-                                                td {}
+                                                td {
+                                                    @match why {
+                                                        // Only offered when the exception is the
+                                                        // repository's own name. A wildcard covers
+                                                        // others, and removing it here would change
+                                                        // what they do on the strength of a button
+                                                        // pressed next to this one.
+                                                        Skipped::Excepted(pattern) if pattern == name => {
+                                                            form method="post"
+                                                                 action={ "/watches/" (watch.id) "/include" } {
+                                                                input type="hidden" name="repo" value=(name);
+                                                                button type="submit" { "Include" }
+                                                            }
+                                                        }
+                                                        Skipped::Excepted(pattern) => {
+                                                            span class="small muted" {
+                                                                "edit " code { (pattern) } " below"
+                                                            }
+                                                        }
+                                                        Skipped::ConfiguredSeparately => {
+                                                            span class="small muted" { "see Forks" }
+                                                        }
+                                                        Skipped::NoUpstream => {
+                                                            span class="small muted" { "add it by hand" }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }}}
                                     }

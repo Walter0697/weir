@@ -20,7 +20,7 @@ use crate::store::{Fork, NewConnection, NewFork, NewWatch, Settings, Store, Watc
 use crate::watch::{self, Skipped};
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
-use axum::response::{IntoResponse, Redirect};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
@@ -63,6 +63,8 @@ pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
         .route("/watches", get(pages::watches).post(create_watch))
         .route("/watches/{id}", post(update_watch))
         .route("/watches/{id}/delete", post(delete_watch))
+        .route("/watches/{id}/except", post(except_repo))
+        .route("/watches/{id}/include", post(include_repo))
         .route("/run", post(trigger_run))
         .route("/cancel", post(cancel_run))
         .route("/runs/{id}", get(pages::run_detail))
@@ -638,6 +640,64 @@ async fn delete_watch(State(app): State<App>, Path(id): Path<i64>) -> impl IntoR
     match app.store.delete_watch(id) {
         Ok(()) => Redirect::to("/watches").into_response(),
         Err(error) => pages::error_page("Could not remove the watch", &format!("{error:#}")),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RepoForm {
+    repo: String,
+}
+
+/// Adds one repository to a watch's exceptions, by name.
+async fn except_repo(
+    State(app): State<App>,
+    Path(id): Path<i64>,
+    axum::Form(form): axum::Form<RepoForm>,
+) -> impl IntoResponse {
+    let Ok(Some(watch)) = app.store.watch(id) else {
+        return pages::error_page("No such watch", "It may already have been removed.");
+    };
+    let mut except = watch.except.clone();
+    let name = form.repo.trim().to_string();
+    if !except.contains(&name) {
+        except.push(name);
+    }
+    save_except(&app, id, &watch, except)
+}
+
+/// Removes a repository's own name from the exceptions.
+///
+/// Only ever removes an exact match. A wildcard covers repositories other than
+/// this one, so quietly deleting it here would change what several of them do
+/// on the strength of a button pressed next to one.
+async fn include_repo(
+    State(app): State<App>,
+    Path(id): Path<i64>,
+    axum::Form(form): axum::Form<RepoForm>,
+) -> impl IntoResponse {
+    let Ok(Some(watch)) = app.store.watch(id) else {
+        return pages::error_page("No such watch", "It may already have been removed.");
+    };
+    let name = form.repo.trim();
+    let except: Vec<String> = watch
+        .except
+        .iter()
+        .filter(|pattern| pattern.trim() != name)
+        .cloned()
+        .collect();
+    save_except(&app, id, &watch, except)
+}
+
+fn save_except(app: &App, id: i64, watch: &Watch, except: Vec<String>) -> Response {
+    let updated = NewWatch {
+        connection_id: watch.connection_id,
+        owner: watch.owner.clone(),
+        except,
+        enabled: watch.enabled,
+    };
+    match app.store.update_watch(id, &updated) {
+        Ok(()) => Redirect::to("/watches").into_response(),
+        Err(error) => pages::error_page("Could not save the exceptions", &format!("{error:#}")),
     }
 }
 

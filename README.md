@@ -290,6 +290,10 @@ walter-opensource — covers 1 repo(s), skips 3
 
 - **Exceptions** you write. Names, or `*` patterns like `test-*`. A bare `*`
   excepts everything, which pauses a watch without losing what you wrote.
+  **Leave alone** on a covered row adds that name; **Include** takes it back
+  out. Include is only offered when the exception *is* the repository's own
+  name — a wildcard covers others, and removing it from beside one row would
+  change what several of them do.
 - **Forks configured by hand win.** That is how one repository keeps its own
   `keep_removed` or a different upstream branch while the rest are covered by
   the rule.
