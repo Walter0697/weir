@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/Walter0697/weir/compare/v0.2.0...v0.3.0) (2026-08-16)
+
+
+### Features
+
+* show when a schedule will next fire, and in which zone ([8c42867](https://github.com/Walter0697/weir/commit/8c428676252af3164ea9ae7de70f097a42d0f9f7))
+
+
+### Fixes
+
+* never sync an archived repository or a pull mirror ([12b5489](https://github.com/Walter0697/weir/commit/12b548922b8ae60f166a4ceeaa7e2eced5963587))
+
 ## [0.2.0](https://github.com/Walter0697/weir/compare/v0.1.1...v0.2.0) (2026-08-16)
 
 
