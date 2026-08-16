@@ -1,6 +1,6 @@
 [package]
 name = "weir"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "Keeps a fork in step with its upstream and puts the result behind a pull request"
 license = "MIT"
