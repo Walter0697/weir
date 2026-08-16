@@ -1,0 +1,31 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  # To dispatch CD below, which is needed because a tag pushed with
+  # GITHUB_TOKEN does not itself trigger a workflow.
+  actions: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # GitHub deliberately does not run workflows for refs pushed with the
+      # built-in token, so the tag alone would publish nothing. Dispatch it.
+      - name: Publish the image for the new tag
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run cd.yml --repo ${{ github.repository }} --ref ${{ steps.release.outputs.tag_name }}

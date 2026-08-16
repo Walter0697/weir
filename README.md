@@ -440,6 +440,31 @@ into wherever your fork keeps that behaviour now.
 The same report tells you when an entry has gone stale: a path upstream no
 longer carries stops appearing at all.
 
+## Releasing
+
+Versions are cut by [release-please](https://github.com/googleapis/release-please)
+from the commit log, so **commit subjects have to be conventional** — anything
+else is invisible to it and will never appear in a release or a changelog:
+
+```
+feat: watch a whole owner, with exceptions
+fix: refuse a second run while one is going
+docs: say what keep_removed costs you
+ci:   publish an image on every push to main
+```
+
+`feat:` bumps the minor version, `fix:` the patch, and `feat!:` or a
+`BREAKING CHANGE:` footer the major. Everything else is recorded but does not
+release anything on its own.
+
+Release-please keeps a pull request open with the next version's changelog. Merge
+it and it tags the release, which publishes `ghcr.io/walter0697/weir:{version}`
+and `:latest`. The tag is dispatched explicitly, because a tag pushed with the
+built-in token does not trigger workflows on its own.
+
+Every commit on `main` publishes `edge` regardless, so nothing waits on a release
+to be runnable.
+
 ## Licence
 
 MIT.
