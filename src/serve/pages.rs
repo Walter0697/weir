@@ -389,12 +389,12 @@ pub async fn settings(State(app): State<App>) -> impl IntoResponse {
                 h2 { "Credentials" }
                 div class="card" {
                     p class="small muted" {
-                        "Stored in the database, never shown again. The database file holds these, "
-                        "so treat its volume as a secret."
+                        "Stored in the database and never shown again — the field only reports whether "
+                        "one is set. That makes the database file a secret, so treat its volume as one."
                     }
                     form method="post" action="/settings/forge-token" {
                         label for="forge_token" {
-                            "Forge token "
+                            "Gitea or Forgejo access token "
                             @match secrets.map(|s| s.forge_token) {
                                 Some(true) => span class="ok" { "— set" },
                                 _ => span class="warn" { "— not set" },
@@ -402,8 +402,14 @@ pub async fn settings(State(app): State<App>) -> impl IntoResponse {
                         }
                         div class="row" {
                             input type="password" id="forge_token" name="token"
-                                  placeholder="write:repository scope is enough" style="flex:1";
+                                  placeholder="from Settings → Applications on your forge" style="flex:1";
                             button type="submit" { "Replace" }
+                        }
+                        p class="small muted" {
+                            "Belongs to a machine account with write access to the forks. Used both to "
+                            "push the sync branch and to open the pull request, so "
+                            code { "write:repository" }
+                            " is enough — it never needs admin, and it is never asked to merge anything."
                         }
                     }
                     form method="post" action="/settings/telegram-token" style="margin-top:1rem" {
