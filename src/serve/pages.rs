@@ -53,6 +53,66 @@ pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; pad
 .note { border-left:3px solid var(--warn); padding:.5rem .8rem; margin:.75rem 0; background:var(--card); }
 .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 1rem; }
 @media (max-width:640px){ .grid2 { grid-template-columns:1fr; } }
+
+/* Cross-document transitions, so moving between pages does not flash white.
+   Browsers without it simply navigate as they always did. */
+@view-transition { navigation: auto; }
+
+/* Everything below is decoration and must be able to switch off entirely.
+   Motion is a preference, and for some people it is a medical one. */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root) { animation: fade-out .12s ease both; }
+  ::view-transition-new(root) { animation: rise .18s cubic-bezier(.2,.7,.3,1) both; }
+
+  main > * { animation: rise .22s cubic-bezier(.2,.7,.3,1) both; }
+  /* A short stagger down the page, capped: past the fourth block the delay
+     stops being pleasant and starts being a wait. */
+  main > :nth-child(2) { animation-delay:.03s }
+  main > :nth-child(3) { animation-delay:.06s }
+  main > :nth-child(n+4) { animation-delay:.09s }
+
+  tbody tr { animation: rise .2s ease both; }
+  tbody tr:nth-child(2){animation-delay:.02s} tbody tr:nth-child(3){animation-delay:.04s}
+  tbody tr:nth-child(4){animation-delay:.06s} tbody tr:nth-child(n+5){animation-delay:.08s}
+
+  .card, tbody tr, button, .btn, a, summary, input, textarea { transition:
+      background-color .16s ease, border-color .16s ease, color .16s ease,
+      box-shadow .16s ease, transform .12s ease, opacity .16s ease; }
+  details[open] > .details-body { animation: unfold .2s cubic-bezier(.2,.7,.3,1) both; }
+  .dot { animation: pulse 1.4s ease-in-out infinite; }
+}
+
+@keyframes rise { from { opacity:0; transform:translateY(5px) } to { opacity:1; transform:none } }
+@keyframes fade-out { to { opacity:0 } }
+@keyframes unfold { from { opacity:0; transform:translateY(-4px) } to { opacity:1; transform:none } }
+@keyframes pulse { 0%,100% { opacity:.35 } 50% { opacity:1 } }
+
+tbody tr:hover { background:color-mix(in srgb, var(--accent) 6%, transparent); }
+.card:hover { border-color:color-mix(in srgb, var(--accent) 28%, var(--line)); }
+button:hover, .btn:hover { border-color:var(--accent); }
+button:active, .btn:active { transform:translateY(1px); }
+button.primary:hover { filter:brightness(1.08); }
+button.danger:hover { border-color:var(--bad); }
+a { color:var(--accent); }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:5px; }
+input:focus, textarea:focus { border-color:var(--accent);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); outline:none; }
+
+/* Collapsible sections. `details` does the work; this only makes it look
+   deliberate rather than like a browser default. */
+details { border:1px solid var(--line); border-radius:10px; background:var(--card); margin-bottom:1rem; }
+details > summary { cursor:pointer; padding:.75rem 1.1rem; list-style:none; font-size:.9rem;
+  display:flex; align-items:center; gap:.5rem; user-select:none; }
+details > summary::-webkit-details-marker { display:none; }
+details > summary::before { content:"›"; display:inline-block; font-size:1.1rem; line-height:1;
+  color:var(--muted); transition:transform .18s cubic-bezier(.2,.7,.3,1); }
+details[open] > summary::before { transform:rotate(90deg); }
+details > summary:hover { color:var(--accent); }
+.details-body { padding:0 1.1rem 1rem; }
+
+/* A run still going, so the page says something is happening without polling. */
+.dot { display:inline-block; width:.5rem; height:.5rem; border-radius:50%;
+  background:currentColor; margin-right:.4rem; vertical-align:middle; }
 "#;
 
 fn shell(title: &str, current: &str, body: Markup) -> Markup {
@@ -216,7 +276,10 @@ fn run_row(run: &Run) -> Markup {
             td class="small mono muted" { (run.started_at.get(..16).unwrap_or(&run.started_at)) }
             td { (run.repo) @if run.dry_run { " " span class="pill muted" { "dry" } } }
             td class=(outcome_class(run.outcome.as_deref())) {
-                (run.outcome.clone().unwrap_or_else(|| "running…".into()))
+                @match &run.outcome {
+                    Some(outcome) => (outcome),
+                    None => { span class="dot" {} "running…" }
+                }
             }
             td { a class="small" href={ "/runs/" (run.id) } { "Details" } }
         }
@@ -241,7 +304,10 @@ pub async fn run_detail(State(app): State<App>, Path(id): Path<i64>) -> impl Int
                             div { a href=(url) { "Open the pull request" } }
                         }
                     }
-                    pre { (run.detail) }
+                    details open {
+                        summary { "Output" }
+                        div class="details-body" { pre { (run.detail) } }
+                    }
                     a class="btn" href="/" { "Back" }
                 },
             )
@@ -289,25 +355,34 @@ pub async fn settings(State(app): State<App>) -> impl IntoResponse {
                                       placeholder="0 5 * * 5";
                             }
                             div {
-                                label for="sync_branch" { "Sync branch" }
-                                input type="text" id="sync_branch" name="sync_branch" value=(settings.sync_branch);
-                            }
-                            div {
-                                label for="boundary_file" { "Boundary file" }
-                                input type="text" id="boundary_file" name="boundary_file" value=(settings.boundary_file);
-                            }
-                            div {
                                 label for="telegram_chat" { "Telegram chat id " span class="muted" { "(optional)" } }
                                 input type="text" id="telegram_chat" name="telegram_chat"
                                       value=(settings.telegram_chat.clone().unwrap_or_default());
                             }
                         }
-                        p class="small muted" {
-                            "The sync branch is force-pushed on every run, and the boundary file records "
-                            "which upstream commit the fork's content matches. Leave both alone unless "
-                            "something else already uses different names."
-                        }
                         button class="primary" type="submit" { "Save" }
+                    }
+
+                    details {
+                        summary { "Branch and file names" span class="muted small" { " — rarely changed" } }
+                        div class="details-body" {
+                            div class="grid2" {
+                                div {
+                                    label for="sync_branch" { "Sync branch" }
+                                    input type="text" id="sync_branch" name="sync_branch" value=(settings.sync_branch);
+                                }
+                                div {
+                                    label for="boundary_file" { "Boundary file" }
+                                    input type="text" id="boundary_file" name="boundary_file" value=(settings.boundary_file);
+                                }
+                            }
+                            p class="small muted" {
+                                "The sync branch is force-pushed on every run, so nothing you want to keep "
+                                "should live there. The boundary file records which upstream commit the "
+                                "fork's content matches — change its name and the next sync will think it "
+                                "has never run. Both are saved with the form above."
+                            }
+                        }
                     }
                 }
 
@@ -409,8 +484,12 @@ pub async fn new_fork(State(app): State<App>) -> impl IntoResponse {
                     }
                 }
 
-                h2 { "Or enter it by hand" }
-                form method="post" action="/forks" { (fork_fields(None)) }
+                details {
+                    summary { "Enter one by hand" span class="muted small" { " — if it is not on the forge yet" } }
+                    div class="details-body" {
+                        form method="post" action="/forks" { (fork_fields(None)) }
+                    }
+                }
             },
         )
         .into_string(),
