@@ -370,12 +370,24 @@ impl Git {
         Ok(())
     }
 
-    /// Attempts a merge. Returns whether it succeeded; a failure here is a
-    /// conflict, not an error, so it is reported rather than raised.
-    pub fn merge(&self, refname: &str) -> Result<bool> {
-        Ok(self
-            .try_run(&["merge", "--quiet", "--no-edit", "--no-ff", refname])?
-            .ok())
+    /// Attempts a merge.
+    ///
+    /// A non-zero exit is usually a conflict, which is an outcome rather than a
+    /// failure — so the result is reported. But it is *not always* a conflict:
+    /// unrelated histories, a ref that does not resolve, or a working tree git
+    /// refuses to touch all exit non-zero having changed nothing. Git's own
+    /// message is the only thing that tells those apart, so it comes back too.
+    pub fn merge(&self, refname: &str) -> Result<std::result::Result<(), String>> {
+        let out = self.try_run(&["merge", "--quiet", "--no-edit", "--no-ff", refname])?;
+        if out.ok() {
+            return Ok(Ok(()));
+        }
+        let said = if out.stderr.is_empty() {
+            out.stdout
+        } else {
+            out.stderr
+        };
+        Ok(Err(said))
     }
 
     pub fn merge_abort(&self) -> Result<()> {
@@ -415,6 +427,20 @@ impl Git {
     pub fn add(&self, path: &str) -> Result<()> {
         self.run(&["add", "--", path])?;
         Ok(())
+    }
+
+    /// Whether a merge is under way and waiting to be concluded.
+    ///
+    /// The exact question, and not the same as "is anything staged": resolving
+    /// a delete/modify conflict back to deleted leaves a merge in progress with
+    /// no difference against HEAD at all, and that merge still has to be
+    /// committed. `MERGE_HEAD` exists for precisely the span between a merge
+    /// starting and being concluded, which is what needs distinguishing from a
+    /// merge that never started.
+    pub fn merge_in_progress(&self) -> Result<bool> {
+        Ok(self
+            .try_run(&["rev-parse", "--verify", "--quiet", "MERGE_HEAD"])?
+            .ok())
     }
 
     /// Whether anything is staged. Used to avoid committing nothing, which git
@@ -498,5 +524,51 @@ mod tests {
         cancel.cancel();
         assert!(elsewhere.is_cancelled(), "the flag is shared, not copied");
         assert!(elsewhere.check().is_err());
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    /// A non-zero merge is usually a conflict and sometimes a refusal, and only
+    /// git's own words tell them apart. Losing them is how "unrelated
+    /// histories" got reported as "nothing to commit".
+    #[test]
+    fn a_merge_that_cannot_start_comes_back_with_gits_reason() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let git = Git::new(dir.path());
+        git.run(&["init", "--quiet", "--initial-branch=main"])
+            .unwrap();
+        std::fs::write(dir.path().join("a"), "a\n").unwrap();
+        git.run(&["add", "."]).unwrap();
+        git.run(&["commit", "--quiet", "-m", "one"]).unwrap();
+
+        let refused = git
+            .merge("no/such/ref")
+            .expect("running git itself worked")
+            .expect_err("but the merge did not");
+        assert!(
+            !refused.trim().is_empty(),
+            "git said something: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_merge_that_works_reports_success_rather_than_a_message() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let git = Git::new(dir.path());
+        git.run(&["init", "--quiet", "--initial-branch=main"])
+            .unwrap();
+        std::fs::write(dir.path().join("a"), "a\n").unwrap();
+        git.run(&["add", "."]).unwrap();
+        git.run(&["commit", "--quiet", "-m", "one"]).unwrap();
+        git.run(&["checkout", "--quiet", "-b", "side"]).unwrap();
+        std::fs::write(dir.path().join("b"), "b\n").unwrap();
+        git.run(&["add", "."]).unwrap();
+        git.run(&["commit", "--quiet", "-m", "two"]).unwrap();
+        git.run(&["checkout", "--quiet", "main"]).unwrap();
+
+        assert!(git.merge("side").unwrap().is_ok());
     }
 }

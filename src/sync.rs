@@ -11,7 +11,7 @@
 
 use crate::boundary::{self, Delta};
 use crate::git::Git;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 /// What to build, resolved from config for one fork.
 pub struct Plan {
@@ -105,10 +105,9 @@ pub fn build(git: &Git, plan: &Plan, upstream_url: &str) -> Result<Sync> {
     // Start from the fork so its own commits and files stay in the pull request.
     git.checkout_new(&plan.sync_branch, &base_ref)?;
 
-    let merge = if git.merge(&upstream_ref)? {
-        Merge::Clean
-    } else {
-        resolve_or_give_up(git, plan, &upstream_ref)?
+    let merge = match git.merge(&upstream_ref)? {
+        Ok(()) => Merge::Clean,
+        Err(said) => resolve_or_give_up(git, plan, &upstream_ref, &said)?,
     };
 
     // Enforced on both paths, and after the merge rather than only during it:
@@ -143,7 +142,7 @@ pub fn build(git: &Git, plan: &Plan, upstream_url: &str) -> Result<Sync> {
 /// A conflicted merge gets exactly one chance: drop the paths this fork keeps
 /// removed, which is the one conflict whose answer never changes. Anything
 /// still unresolved is a human's decision.
-fn resolve_or_give_up(git: &Git, plan: &Plan, upstream_ref: &str) -> Result<Merge> {
+fn resolve_or_give_up(git: &Git, plan: &Plan, upstream_ref: &str, git_said: &str) -> Result<Merge> {
     for path in &plan.keep_removed {
         git.remove(path)
             .with_context(|| format!("keeping {path} removed during the merge"))?;
@@ -151,6 +150,21 @@ fn resolve_or_give_up(git: &Git, plan: &Plan, upstream_ref: &str) -> Result<Merg
 
     let conflicts = git.conflicted_paths()?;
     if conflicts.is_empty() {
+        // Nothing conflicted and no merge under way: it did not fail part-way,
+        // it never started. Unrelated histories and a ref that does not resolve
+        // both land here, and both used to be reported as "concluding the
+        // merge: nothing to commit" — the symptom, with the cause discarded.
+        //
+        // Asked as "is a merge in progress" rather than "is anything staged",
+        // because resolving a delete/modify back to deleted leaves a real merge
+        // with no diff against HEAD, and that one does need committing.
+        if !git.merge_in_progress()? {
+            bail!(
+                "merging {upstream_ref} did nothing and left no conflicts, so there is nothing \
+                 to conclude. git said: {}",
+                git_said.trim()
+            );
+        }
         git.run(&["commit", "--quiet", "--no-edit"])
             .context("concluding the merge")?;
         return Ok(Merge::Clean);
