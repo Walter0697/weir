@@ -22,8 +22,24 @@ services:
     image: ghcr.io/walter0697/weir:edge
     restart: unless-stopped
     command: ["serve", "--db", "/data/weir.db", "--bind", "0.0.0.0:8080"]
+
+    # Two different tokens, easily confused:
+    #
+    #   WEIR_UI_TOKEN   lets *you* into this web page. Invent one.
+    #   the forge PAT   lets weir push and open pull requests. Set it in the
+    #                   UI under Connections; it lives in the database, not here.
+    #
+    # WEIR_UI_TOKEN is only required when this is reachable from more than
+    # localhost. Unset, the page is open to anything that can reach the port.
+    environment:
+      - WEIR_UI_TOKEN=${WEIR_UI_TOKEN:?set one, e.g. head -c 18 /dev/urandom | base64}
+
     ports:
+      # Published to localhost only. To reach it from another machine, drop the
+      # 127.0.0.1: prefix — and note the sign-in token then crosses the network
+      # in the clear, since this is plain HTTP.
       - "127.0.0.1:8080:8080"
+
     volumes:
       # Holds the forge token. Treat this volume as a secret.
       - weir-data:/data
