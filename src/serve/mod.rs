@@ -14,7 +14,7 @@ mod pages;
 use crate::forge::Forge;
 use crate::notify::{self, Notifier};
 use crate::runner::{self, ForgeSpec, ForkSpec, Options};
-use crate::store::{NewFork, Settings, Store};
+use crate::store::{Fork, NewConnection, NewFork, Settings, Store};
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Redirect};
@@ -40,8 +40,13 @@ pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
     let router = Router::new()
         .route("/", get(pages::dashboard))
         .route("/settings", get(pages::settings).post(save_settings))
-        .route("/settings/forge-token", post(save_forge_token))
         .route("/settings/telegram", post(save_telegram))
+        .route(
+            "/connections",
+            get(pages::connections).post(create_connection),
+        )
+        .route("/connections/{id}", post(update_connection))
+        .route("/connections/{id}/delete", post(delete_connection))
         .route("/forks/new", get(pages::new_fork))
         .route("/forks", post(create_fork))
         .route("/forks/{id}", get(pages::edit_fork).post(update_fork))
@@ -72,14 +77,20 @@ impl App {
         &self.store
     }
 
-    /// Everything a sync needs, assembled from the database.
-    fn forge_spec(&self) -> Result<ForgeSpec> {
-        let settings = self.store.settings()?;
+    /// Everything a sync needs, assembled from the fork's own connection.
+    ///
+    /// Resolved per fork rather than globally, which is what lets two forks sit
+    /// on different forges, or under different owners on the same one.
+    fn forge_spec(&self, fork: &Fork) -> Result<ForgeSpec> {
+        let connection = self
+            .store
+            .connection(fork.connection_id)?
+            .with_context(|| format!("{} has no connection; pick one for it", fork.repo))?;
         Ok(ForgeSpec {
-            url: settings.forge_url,
-            owner: settings.forge_owner,
-            username: settings.forge_username,
-            token: self.store.forge_token()?,
+            url: connection.url,
+            owner: fork.owner.clone(),
+            username: connection.username,
+            token: self.store.connection_token(fork.connection_id)?,
         })
     }
 
@@ -127,7 +138,7 @@ impl App {
         };
 
         let result = self
-            .forge_spec()
+            .forge_spec(&fork)
             .and_then(|forge| Ok((forge, self.options(dry_run)?)))
             .and_then(|(forge, options)| runner::sync_fork(&forge, &spec, &options));
 
@@ -159,9 +170,6 @@ impl App {
 
 #[derive(Deserialize)]
 pub struct SettingsForm {
-    forge_url: String,
-    forge_owner: String,
-    forge_username: String,
     sync_branch: String,
     boundary_file: String,
     schedule: String,
@@ -182,9 +190,6 @@ async fn save_settings(
     }
 
     let settings = Settings {
-        forge_url: form.forge_url.trim().to_string(),
-        forge_owner: form.forge_owner.trim().to_string(),
-        forge_username: blank_to_none(&form.forge_username),
         sync_branch: form.sync_branch.trim().to_string(),
         boundary_file: form.boundary_file.trim().to_string(),
         schedule,
@@ -199,17 +204,103 @@ async fn save_settings(
 }
 
 #[derive(Deserialize)]
-pub struct TokenForm {
+pub struct ConnectionForm {
+    name: String,
+    kind: String,
+    url: String,
+    username: String,
+    #[serde(default)]
     token: String,
 }
 
-async fn save_forge_token(
+impl ConnectionForm {
+    fn split(self) -> (NewConnection, String) {
+        (
+            NewConnection {
+                name: self.name.trim().to_string(),
+                kind: self.kind.trim().to_string(),
+                url: self.url.trim().trim_end_matches('/').to_string(),
+                username: blank_to_none(&self.username),
+            },
+            self.token,
+        )
+    }
+}
+
+fn check_connection(new: &NewConnection) -> Option<String> {
+    if new.name.is_empty() {
+        return Some("Give it a name, so forks can say which one they use.".into());
+    }
+    if !new.url.starts_with("http://") && !new.url.starts_with("https://") {
+        return Some(format!(
+            "The URL must start with http:// or https:// — got {:?}.",
+            new.url
+        ));
+    }
+    if new.url.starts_with("http://") {
+        // Not refused: a homelab forge on a trusted network is a legitimate
+        // setup. Said out loud, because the token crosses that network in the
+        // clear on every run.
+        return None;
+    }
+    None
+}
+
+async fn create_connection(
     State(app): State<App>,
-    axum::Form(form): axum::Form<TokenForm>,
+    axum::Form(form): axum::Form<ConnectionForm>,
 ) -> impl IntoResponse {
-    match app.store.set_forge_token(form.token.trim()) {
-        Ok(()) => Redirect::to("/settings").into_response(),
-        Err(error) => pages::error_page("Could not store the token", &format!("{error:#}")),
+    let (new, token) = form.split();
+    if let Some(problem) = check_connection(&new) {
+        return pages::error_page("That connection cannot be added", &problem);
+    }
+    if token.trim().is_empty() {
+        return pages::error_page(
+            "That connection cannot be added",
+            "A token is required: without one the forge cannot be listed, pushed to, \
+             or asked to open a pull request.",
+        );
+    }
+    match app.store.add_connection(&new, token.trim()) {
+        Ok(_) => Redirect::to("/connections").into_response(),
+        Err(error) => pages::error_page("Could not add the connection", &format!("{error:#}")),
+    }
+}
+
+async fn update_connection(
+    State(app): State<App>,
+    Path(id): Path<i64>,
+    axum::Form(form): axum::Form<ConnectionForm>,
+) -> impl IntoResponse {
+    let (new, token) = form.split();
+    if let Some(problem) = check_connection(&new) {
+        return pages::error_page("That change cannot be saved", &problem);
+    }
+    match app.store.update_connection(id, &new, &token) {
+        Ok(()) => Redirect::to("/connections").into_response(),
+        Err(error) => pages::error_page("Could not save the connection", &format!("{error:#}")),
+    }
+}
+
+async fn delete_connection(State(app): State<App>, Path(id): Path<i64>) -> impl IntoResponse {
+    // Refused rather than cascaded: removing a connection out from under a fork
+    // would leave it configured but unsyncable, and silently.
+    match app.store.forks_using(id) {
+        Ok(0) => {}
+        Ok(n) => {
+            return pages::error_page(
+                "That connection is still in use",
+                &format!(
+                    "{n} fork(s) sync through it. Point them at another connection, or remove \
+                     them first."
+                ),
+            )
+        }
+        Err(error) => return pages::error_page("Could not check the forks", &format!("{error:#}")),
+    }
+    match app.store.delete_connection(id) {
+        Ok(()) => Redirect::to("/connections").into_response(),
+        Err(error) => pages::error_page("Could not remove the connection", &format!("{error:#}")),
     }
 }
 
@@ -246,6 +337,8 @@ async fn save_telegram(
 
 #[derive(Deserialize)]
 pub struct ForkForm {
+    connection_id: i64,
+    owner: String,
     repo: String,
     upstream: String,
     branch: String,
@@ -258,6 +351,8 @@ pub struct ForkForm {
 impl ForkForm {
     fn into_new(self) -> NewFork {
         NewFork {
+            connection_id: self.connection_id,
+            owner: self.owner.trim().to_string(),
             repo: self.repo.trim().to_string(),
             upstream: self.upstream.trim().to_string(),
             branch: self.branch.trim().to_string(),
@@ -315,6 +410,15 @@ async fn delete_fork(State(app): State<App>, Path(id): Path<i64>) -> impl IntoRe
 fn check_fork(app: &App, fork: &NewFork) -> Option<String> {
     if fork.repo.is_empty() {
         return Some("The repository name is empty.".into());
+    }
+    if fork.owner.is_empty() {
+        return Some(
+            "The owner is empty — that is the user or organisation the fork lives under.".into(),
+        );
+    }
+    match app.store.connection(fork.connection_id) {
+        Ok(Some(_)) => {}
+        _ => return Some("Pick a connection: that is the forge this fork lives on.".into()),
     }
     if fork.upstream.is_empty() {
         return Some("The upstream URL is empty.".into());
@@ -375,19 +479,33 @@ async fn trigger_run(
 #[derive(Deserialize)]
 pub struct DiscoverQuery {
     #[serde(default)]
-    pub discover: Option<String>,
+    pub connection: Option<i64>,
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
-/// Repositories on the forge that are not already configured.
-pub fn discover(app: &App) -> Result<Vec<crate::forge::Discovered>> {
-    let settings = app.store.settings()?;
+/// Repositories under one owner on one connection that are not yet configured.
+pub fn discover(
+    app: &App,
+    connection_id: i64,
+    owner: &str,
+) -> Result<Vec<crate::forge::Discovered>> {
+    let connection = app
+        .store
+        .connection(connection_id)?
+        .context("no such connection")?;
     let token = app
         .store
-        .forge_token()?
-        .context("no forge token is set, so the forge cannot be asked what it has")?;
-    let gitea =
-        crate::forge::gitea::Gitea::new(&settings.forge_url, &settings.forge_owner, &token)?;
-    let known: Vec<String> = app.store.forks()?.into_iter().map(|f| f.repo).collect();
+        .connection_token(connection_id)?
+        .context("that connection has no token, so the forge cannot be asked what it has")?;
+    let gitea = crate::forge::gitea::Gitea::new(&connection.url, owner, &token)?;
+    let known: Vec<String> = app
+        .store
+        .forks()?
+        .into_iter()
+        .filter(|f| f.connection_id == connection_id && f.owner == owner)
+        .map(|f| f.repo)
+        .collect();
     Ok(gitea
         .discover()?
         .into_iter()

@@ -25,19 +25,16 @@
 //! have to edit files to use.
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection as Sqlite, OptionalExtension};
 use std::path::Path;
 use std::sync::Mutex;
 
 pub struct Store {
-    conn: Mutex<Connection>,
+    conn: Mutex<Sqlite>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Settings {
-    pub forge_url: String,
-    pub forge_owner: String,
-    pub forge_username: Option<String>,
     pub sync_branch: String,
     pub boundary_file: String,
     /// A cron expression, or `None` when nothing is scheduled.
@@ -45,16 +42,44 @@ pub struct Settings {
     pub telegram_chat: Option<String>,
 }
 
+/// A forge and the credential for it, which are one thing rather than two: the
+/// URL can do nothing useful for a private repository without the token, and
+/// the token means nothing without the URL it belongs to.
+///
+/// A list rather than a singleton, so a second instance — or the same instance
+/// under a different account — is another row rather than another deployment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Connection {
+    pub id: i64,
+    pub name: String,
+    pub kind: String,
+    pub url: String,
+    pub username: Option<String>,
+    /// Reported, never returned. Use [`Store::connection_token`] deliberately.
+    pub has_token: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewConnection {
+    pub name: String,
+    pub kind: String,
+    pub url: String,
+    pub username: Option<String>,
+}
+
 /// Whether a secret is present, without carrying it around.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SecretStatus {
-    pub forge_token: bool,
     pub telegram_token: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fork {
     pub id: i64,
+    pub connection_id: i64,
+    /// The user or organisation the fork lives under. On the fork rather than
+    /// the connection, so one forge can hold repositories under several owners.
+    pub owner: String,
     pub repo: String,
     pub upstream: String,
     pub branch: String,
@@ -65,6 +90,8 @@ pub struct Fork {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewFork {
+    pub connection_id: i64,
+    pub owner: String,
     pub repo: String,
     pub upstream: String,
     pub branch: String,
@@ -102,7 +129,7 @@ impl Store {
                     .with_context(|| format!("creating {}", parent.display()))?;
             }
         }
-        let conn = Connection::open(path)
+        let conn = Sqlite::open(path)
             .with_context(|| format!("opening the database at {}", path.display()))?;
         restrict(path)?;
         let store = Self {
@@ -115,7 +142,7 @@ impl Store {
     #[cfg(test)]
     fn in_memory() -> Result<Self> {
         let store = Self {
-            conn: Mutex::new(Connection::open_in_memory()?),
+            conn: Mutex::new(Sqlite::open_in_memory()?),
         };
         store.migrate()?;
         Ok(store)
@@ -141,6 +168,18 @@ impl Store {
                 telegram_chat  TEXT
             );
             INSERT OR IGNORE INTO settings (id) VALUES (1);
+
+            -- A forge and its credential, together, because neither is useful
+            -- without the other. Several rows so a second instance, or the same
+            -- one under a different account, is a row rather than a deployment.
+            CREATE TABLE IF NOT EXISTS connections (
+                id       INTEGER PRIMARY KEY,
+                name     TEXT NOT NULL UNIQUE,
+                kind     TEXT NOT NULL DEFAULT 'gitea',
+                url      TEXT NOT NULL,
+                username TEXT,
+                token    TEXT
+            );
 
             CREATE TABLE IF NOT EXISTS forks (
                 id              INTEGER PRIMARY KEY,
@@ -178,25 +217,183 @@ impl Store {
             "#,
         )
         .context("creating the schema")?;
+
+        // `owner` belongs to the fork rather than the forge: one instance can
+        // hold repositories under several organisations, and the earlier schema
+        // could not express that.
+        let fork_columns: Vec<String> = {
+            let mut statement = conn.prepare("PRAGMA table_info(forks)")?;
+            let names = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            names
+        };
+        if !fork_columns.iter().any(|c| c == "connection_id") {
+            conn.execute(
+                "ALTER TABLE forks ADD COLUMN connection_id INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !fork_columns.iter().any(|c| c == "owner") {
+            conn.execute(
+                "ALTER TABLE forks ADD COLUMN owner TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
+
+        // Carry an existing single-forge install across rather than making
+        // somebody retype what they already entered.
+        let connections: i64 =
+            conn.query_row("SELECT count(*) FROM connections", [], |row| row.get(0))?;
+        if connections == 0 {
+            let legacy: Option<(String, String, Option<String>, Option<String>)> = conn
+                .query_row(
+                    "SELECT forge_url, forge_owner, forge_username, forge_token
+                     FROM settings WHERE id = 1 AND forge_url <> ''",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()?;
+            if let Some((url, owner, username, token)) = legacy {
+                conn.execute(
+                    "INSERT INTO connections (name, kind, url, username, token)
+                     VALUES (?1, 'gitea', ?2, ?3, ?4)",
+                    params!["default", url, username, token],
+                )?;
+                let id = conn.last_insert_rowid();
+                conn.execute(
+                    "UPDATE forks SET connection_id = ?1, owner = ?2
+                     WHERE connection_id = 0 OR owner = ''",
+                    params![id, owner],
+                )?;
+            }
+        }
         Ok(())
+    }
+
+    pub fn connections(&self) -> Result<Vec<Connection>> {
+        let conn = self.conn.lock().expect("the store lock is never poisoned");
+        let mut statement = conn.prepare(
+            "SELECT id, name, kind, url, username,
+                    CASE WHEN token IS NULL OR trim(token) = '' THEN 0 ELSE 1 END
+             FROM connections ORDER BY name",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(Connection {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    kind: row.get(2)?,
+                    url: row.get(3)?,
+                    username: row.get(4)?,
+                    has_token: row.get::<_, i64>(5)? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn connection(&self, id: i64) -> Result<Option<Connection>> {
+        Ok(self.connections()?.into_iter().find(|c| c.id == id))
+    }
+
+    pub fn add_connection(&self, new: &NewConnection, token: &str) -> Result<i64> {
+        let id = {
+            let conn = self.conn.lock().expect("the store lock is never poisoned");
+            conn.execute(
+                "INSERT INTO connections (name, kind, url, username, token)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![new.name, new.kind, new.url, new.username, token],
+            )
+            .with_context(|| format!("adding connection {:?}", new.name))?;
+            conn.last_insert_rowid()
+        };
+        self.record("connection added", None, Some(&new.name))?;
+        Ok(id)
+    }
+
+    /// A blank token leaves the stored one alone: it is never rendered back, so
+    /// it cannot be round-tripped through a form.
+    pub fn update_connection(&self, id: i64, new: &NewConnection, token: &str) -> Result<()> {
+        let before = self.connection(id)?;
+        {
+            let conn = self.conn.lock().expect("the store lock is never poisoned");
+            conn.execute(
+                "UPDATE connections SET name = ?1, kind = ?2, url = ?3, username = ?4 WHERE id = ?5",
+                params![new.name, new.kind, new.url, new.username, id],
+            )?;
+            if !token.trim().is_empty() {
+                conn.execute(
+                    "UPDATE connections SET token = ?1 WHERE id = ?2",
+                    params![token.trim(), id],
+                )?;
+            }
+        }
+        if let Some(before) = before {
+            if before.url != new.url {
+                self.record(
+                    &format!("{} url", new.name),
+                    Some(&before.url),
+                    Some(&new.url),
+                )?;
+            }
+        }
+        if !token.trim().is_empty() {
+            self.record(&format!("{} token", new.name), None, Some("(replaced)"))?;
+        }
+        Ok(())
+    }
+
+    pub fn delete_connection(&self, id: i64) -> Result<()> {
+        let before = self.connection(id)?;
+        {
+            let conn = self.conn.lock().expect("the store lock is never poisoned");
+            conn.execute("DELETE FROM connections WHERE id = ?1", params![id])?;
+        }
+        if let Some(before) = before {
+            self.record("connection removed", Some(&before.name), None)?;
+        }
+        Ok(())
+    }
+
+    /// Deliberately separate from [`Store::connections`], so a page cannot
+    /// render a token by accident.
+    pub fn connection_token(&self, id: i64) -> Result<Option<String>> {
+        let conn = self.conn.lock().expect("the store lock is never poisoned");
+        Ok(conn
+            .query_row(
+                "SELECT token FROM connections WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty()))
+    }
+
+    /// How many forks reference a connection, so removing one can say what it
+    /// would strand.
+    pub fn forks_using(&self, connection_id: i64) -> Result<usize> {
+        Ok(self
+            .forks()?
+            .into_iter()
+            .filter(|f| f.connection_id == connection_id)
+            .count())
     }
 
     pub fn settings(&self) -> Result<Settings> {
         let conn = self.conn.lock().expect("the store lock is never poisoned");
         let settings = conn.query_row(
-            "SELECT forge_url, forge_owner, forge_username, sync_branch, boundary_file,
-                    schedule, telegram_chat
+            "SELECT sync_branch, boundary_file, schedule, telegram_chat
              FROM settings WHERE id = 1",
             [],
             |row| {
                 Ok(Settings {
-                    forge_url: row.get(0)?,
-                    forge_owner: row.get(1)?,
-                    forge_username: row.get(2)?,
-                    sync_branch: row.get(3)?,
-                    boundary_file: row.get(4)?,
-                    schedule: row.get(5)?,
-                    telegram_chat: row.get(6)?,
+                    sync_branch: row.get(0)?,
+                    boundary_file: row.get(1)?,
+                    schedule: row.get(2)?,
+                    telegram_chat: row.get(3)?,
                 })
             },
         )?;
@@ -208,13 +405,10 @@ impl Store {
         {
             let conn = self.conn.lock().expect("the store lock is never poisoned");
             conn.execute(
-                "UPDATE settings SET forge_url = ?1, forge_owner = ?2, forge_username = ?3,
-                        sync_branch = ?4, boundary_file = ?5, schedule = ?6, telegram_chat = ?7
+                "UPDATE settings SET sync_branch = ?1, boundary_file = ?2, schedule = ?3,
+                        telegram_chat = ?4
                  WHERE id = 1",
                 params![
-                    settings.forge_url,
-                    settings.forge_owner,
-                    settings.forge_username,
                     settings.sync_branch,
                     settings.boundary_file,
                     settings.schedule,
@@ -225,8 +419,6 @@ impl Store {
         // Recorded field by field so the trail says what moved, not merely that
         // somebody pressed save.
         for (what, old, new) in [
-            ("forge url", &before.forge_url, &settings.forge_url),
-            ("forge owner", &before.forge_owner, &settings.forge_owner),
             ("sync branch", &before.sync_branch, &settings.sync_branch),
             (
                 "boundary file",
@@ -248,19 +440,6 @@ impl Store {
         Ok(())
     }
 
-    /// Stores the forge token. Never echoed anywhere; the audit trail records
-    /// only that it changed.
-    pub fn set_forge_token(&self, token: &str) -> Result<()> {
-        {
-            let conn = self.conn.lock().expect("the store lock is never poisoned");
-            conn.execute(
-                "UPDATE settings SET forge_token = ?1 WHERE id = 1",
-                params![token],
-            )?;
-        }
-        self.record("forge token", None, Some("(replaced)"))
-    }
-
     pub fn set_telegram_token(&self, token: &str) -> Result<()> {
         {
             let conn = self.conn.lock().expect("the store lock is never poisoned");
@@ -270,15 +449,6 @@ impl Store {
             )?;
         }
         self.record("telegram token", None, Some("(replaced)"))
-    }
-
-    pub fn forge_token(&self) -> Result<Option<String>> {
-        let conn = self.conn.lock().expect("the store lock is never poisoned");
-        Ok(conn
-            .query_row("SELECT forge_token FROM settings WHERE id = 1", [], |row| {
-                row.get::<_, Option<String>>(0)
-            })?
-            .filter(|t| !t.trim().is_empty()))
     }
 
     pub fn telegram_token(&self) -> Result<Option<String>> {
@@ -295,7 +465,6 @@ impl Store {
     /// Whether each secret is present, for a UI that must not show them.
     pub fn secret_status(&self) -> Result<SecretStatus> {
         Ok(SecretStatus {
-            forge_token: self.forge_token()?.is_some(),
             telegram_token: self.telegram_token()?.is_some(),
         })
     }
@@ -303,19 +472,22 @@ impl Store {
     pub fn forks(&self) -> Result<Vec<Fork>> {
         let conn = self.conn.lock().expect("the store lock is never poisoned");
         let mut statement = conn.prepare(
-            "SELECT id, repo, upstream, branch, upstream_branch, keep_removed, enabled
-             FROM forks ORDER BY repo",
+            "SELECT id, connection_id, owner, repo, upstream, branch, upstream_branch,
+                    keep_removed, enabled
+             FROM forks ORDER BY owner, repo",
         )?;
         let forks = statement
             .query_map([], |row| {
                 Ok(Fork {
                     id: row.get(0)?,
-                    repo: row.get(1)?,
-                    upstream: row.get(2)?,
-                    branch: row.get(3)?,
-                    upstream_branch: row.get(4)?,
-                    keep_removed: split_paths(&row.get::<_, String>(5)?),
-                    enabled: row.get::<_, i64>(6)? != 0,
+                    connection_id: row.get(1)?,
+                    owner: row.get(2)?,
+                    repo: row.get(3)?,
+                    upstream: row.get(4)?,
+                    branch: row.get(5)?,
+                    upstream_branch: row.get(6)?,
+                    keep_removed: split_paths(&row.get::<_, String>(7)?),
+                    enabled: row.get::<_, i64>(8)? != 0,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -330,9 +502,12 @@ impl Store {
         let id = {
             let conn = self.conn.lock().expect("the store lock is never poisoned");
             conn.execute(
-                "INSERT INTO forks (repo, upstream, branch, upstream_branch, keep_removed, enabled)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO forks (connection_id, owner, repo, upstream, branch,
+                        upstream_branch, keep_removed, enabled)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
+                    fork.connection_id,
+                    fork.owner,
                     fork.repo,
                     fork.upstream,
                     fork.branch,
@@ -353,10 +528,12 @@ impl Store {
         {
             let conn = self.conn.lock().expect("the store lock is never poisoned");
             conn.execute(
-                "UPDATE forks SET repo = ?1, upstream = ?2, branch = ?3, upstream_branch = ?4,
-                        keep_removed = ?5, enabled = ?6
-                 WHERE id = ?7",
+                "UPDATE forks SET connection_id = ?1, owner = ?2, repo = ?3, upstream = ?4,
+                        branch = ?5, upstream_branch = ?6, keep_removed = ?7, enabled = ?8
+                 WHERE id = ?9",
                 params![
+                    fork.connection_id,
+                    fork.owner,
                     fork.repo,
                     fork.upstream,
                     fork.branch,
@@ -529,8 +706,26 @@ fn restrict(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn fork(repo: &str) -> NewFork {
+    fn store_with_connection() -> (Store, i64) {
+        let store = Store::in_memory().unwrap();
+        let id = store
+            .add_connection(
+                &NewConnection {
+                    name: "home".into(),
+                    kind: "gitea".into(),
+                    url: "https://forge.example".into(),
+                    username: Some("weir-bot".into()),
+                },
+                "secret-token-value",
+            )
+            .unwrap();
+        (store, id)
+    }
+
+    fn fork(connection_id: i64, owner: &str, repo: &str) -> NewFork {
         NewFork {
+            connection_id,
+            owner: owner.to_string(),
             repo: repo.to_string(),
             upstream: format!("https://example.invalid/{repo}.git"),
             branch: "main".to_string(),
@@ -541,32 +736,187 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_database_has_usable_defaults() {
+    fn a_fresh_database_has_usable_defaults_and_no_connections() {
         let store = Store::in_memory().unwrap();
         let settings = store.settings().unwrap();
         assert_eq!(settings.sync_branch, "upstream-sync");
         assert_eq!(settings.boundary_file, ".upstream-sync");
         assert_eq!(settings.schedule, None, "nothing is scheduled until asked");
+        assert!(store.connections().unwrap().is_empty());
     }
 
     #[test]
     fn migrating_twice_is_harmless() {
-        let store = Store::in_memory().unwrap();
-        store.add_fork(&fork("codex")).unwrap();
+        let (store, id) = store_with_connection();
+        store.add_fork(&fork(id, "org", "codex")).unwrap();
         store.migrate().unwrap();
         assert_eq!(store.forks().unwrap().len(), 1, "data survives");
+        assert_eq!(store.connections().unwrap().len(), 1);
+    }
+
+    /// A forge and its credential are one row, and the credential never comes
+    /// back out through the listing a page renders.
+    #[test]
+    fn a_connection_reports_that_it_has_a_token_without_handing_it_over() {
+        let (store, id) = store_with_connection();
+
+        let listed = &store.connections().unwrap()[0];
+        assert_eq!(listed.name, "home");
+        assert_eq!(listed.url, "https://forge.example");
+        assert!(listed.has_token);
+        let rendered = format!("{listed:?}");
+        assert!(!rendered.contains("secret-token-value"), "{rendered}");
+
+        assert_eq!(
+            store.connection_token(id).unwrap().as_deref(),
+            Some("secret-token-value"),
+            "but it is there when asked for deliberately"
+        );
+    }
+
+    #[test]
+    fn a_blank_token_on_update_keeps_the_stored_one() {
+        let (store, id) = store_with_connection();
+        let renamed = NewConnection {
+            name: "home gitea".into(),
+            kind: "gitea".into(),
+            url: "https://forge.example".into(),
+            username: None,
+        };
+        store.update_connection(id, &renamed, "   ").unwrap();
+
+        assert_eq!(
+            store.connection_token(id).unwrap().as_deref(),
+            Some("secret-token-value"),
+            "editing the name must not require pasting the token again"
+        );
+        assert_eq!(store.connections().unwrap()[0].name, "home gitea");
+    }
+
+    #[test]
+    fn a_replaced_token_is_recorded_without_either_value() {
+        let (store, id) = store_with_connection();
+        store
+            .update_connection(
+                id,
+                &NewConnection {
+                    name: "home".into(),
+                    kind: "gitea".into(),
+                    url: "https://forge.example".into(),
+                    username: None,
+                },
+                "a-different-secret",
+            )
+            .unwrap();
+
+        let trail = format!("{:?}", store.audit(10).unwrap());
+        assert!(!trail.contains("secret-token-value"), "{trail}");
+        assert!(!trail.contains("a-different-secret"), "{trail}");
+        assert!(trail.contains("home token"), "but the change is recorded");
+    }
+
+    #[test]
+    fn an_empty_token_reads_as_absent_rather_than_as_a_blank_credential() {
+        let store = Store::in_memory().unwrap();
+        let id = store
+            .add_connection(
+                &NewConnection {
+                    name: "empty".into(),
+                    kind: "gitea".into(),
+                    url: "https://forge.example".into(),
+                    username: None,
+                },
+                "   ",
+            )
+            .unwrap();
+        assert_eq!(store.connection_token(id).unwrap(), None);
+        assert!(!store.connections().unwrap()[0].has_token);
+    }
+
+    /// The reason `owner` moved onto the fork: one forge, several
+    /// organisations, which the old shape could not express at all.
+    #[test]
+    fn one_connection_can_hold_forks_under_several_owners() {
+        let (store, id) = store_with_connection();
+        store.add_fork(&fork(id, "opensource", "codex")).unwrap();
+        store.add_fork(&fork(id, "internal", "runner")).unwrap();
+
+        let owners: Vec<_> = store
+            .forks()
+            .unwrap()
+            .into_iter()
+            .map(|f| format!("{}/{}", f.owner, f.repo))
+            .collect();
+        assert_eq!(owners, vec!["internal/runner", "opensource/codex"]);
+        assert_eq!(store.forks_using(id).unwrap(), 2);
+    }
+
+    #[test]
+    fn forks_can_sit_on_different_forges() {
+        let (store, home) = store_with_connection();
+        let other = store
+            .add_connection(
+                &NewConnection {
+                    name: "elsewhere".into(),
+                    kind: "forgejo".into(),
+                    url: "https://other.example".into(),
+                    username: None,
+                },
+                "another-token",
+            )
+            .unwrap();
+        store.add_fork(&fork(home, "org", "codex")).unwrap();
+        store.add_fork(&fork(other, "org", "dokploy")).unwrap();
+
+        assert_eq!(store.forks_using(home).unwrap(), 1);
+        assert_eq!(store.forks_using(other).unwrap(), 1);
+    }
+
+    /// An install from before connections existed must not have to be retyped.
+    #[test]
+    fn an_older_single_forge_install_is_carried_across() {
+        let store = Store::in_memory().unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE settings SET forge_url = 'https://old.example',
+                        forge_owner = 'old-org', forge_username = 'bot', forge_token = 'old-token'
+                 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO forks (repo, upstream, branch, connection_id, owner)
+                 VALUES ('codex', 'https://example.invalid/codex.git', 'main', 0, '')",
+                [],
+            )
+            .unwrap();
+        }
+
+        store.migrate().unwrap();
+
+        let connections = store.connections().unwrap();
+        assert_eq!(connections.len(), 1, "the old forge became a connection");
+        assert_eq!(connections[0].url, "https://old.example");
+        assert!(connections[0].has_token);
+
+        let forks = store.forks().unwrap();
+        assert_eq!(forks[0].owner, "old-org", "the owner moved onto the fork");
+        assert_eq!(forks[0].connection_id, connections[0].id);
     }
 
     #[test]
     fn forks_round_trip() {
-        let store = Store::in_memory().unwrap();
-        let mut new = fork("codex");
+        let (store, connection) = store_with_connection();
+        let mut new = fork(connection, "org", "codex");
         new.keep_removed = vec![".github/workflows/a.yml".into(), "b.yml".into()];
         new.upstream_branch = Some("master".into());
         let id = store.add_fork(&new).unwrap();
 
         let stored = store.fork(id).unwrap().expect("just added");
         assert_eq!(stored.repo, "codex");
+        assert_eq!(stored.owner, "org");
+        assert_eq!(stored.connection_id, connection);
         assert_eq!(stored.keep_removed, new.keep_removed);
         assert_eq!(stored.upstream_branch.as_deref(), Some("master"));
         assert!(stored.enabled);
@@ -574,16 +924,16 @@ mod tests {
 
     #[test]
     fn the_same_fork_cannot_be_added_twice() {
-        let store = Store::in_memory().unwrap();
-        store.add_fork(&fork("codex")).unwrap();
-        assert!(store.add_fork(&fork("codex")).is_err());
+        let (store, id) = store_with_connection();
+        store.add_fork(&fork(id, "org", "codex")).unwrap();
+        assert!(store.add_fork(&fork(id, "org", "codex")).is_err());
     }
 
     #[test]
     fn forks_may_disagree_about_their_base_branch() {
-        let store = Store::in_memory().unwrap();
-        store.add_fork(&fork("codex")).unwrap();
-        let mut dokploy = fork("dokploy");
+        let (store, id) = store_with_connection();
+        store.add_fork(&fork(id, "org", "codex")).unwrap();
+        let mut dokploy = fork(id, "org", "dokploy");
         dokploy.branch = "canary".into();
         store.add_fork(&dokploy).unwrap();
 
@@ -596,48 +946,21 @@ mod tests {
         assert_eq!(branches, vec!["main", "canary"]);
     }
 
-    /// The token is the reason the database file is sensitive. It must never
-    /// come back out through anything a page can render.
-    #[test]
-    fn the_token_is_readable_only_deliberately_and_never_audited() {
-        let store = Store::in_memory().unwrap();
-        assert!(!store.secret_status().unwrap().forge_token);
-
-        store.set_forge_token("super-secret-value").unwrap();
-
-        assert!(store.secret_status().unwrap().forge_token);
-        assert_eq!(
-            store.forge_token().unwrap().as_deref(),
-            Some("super-secret-value")
-        );
-
-        let trail = format!("{:?}", store.audit(10).unwrap());
-        assert!(!trail.contains("super-secret-value"), "{trail}");
-        assert!(trail.contains("forge token"), "but the change is recorded");
-    }
-
-    #[test]
-    fn an_empty_token_reads_as_absent_rather_than_as_a_blank_credential() {
-        let store = Store::in_memory().unwrap();
-        store.set_forge_token("   ").unwrap();
-        assert_eq!(store.forge_token().unwrap(), None);
-        assert!(!store.secret_status().unwrap().forge_token);
-    }
-
     /// The whole reason the audit table exists: a form loses the history a
     /// git-tracked file gave for free.
     #[test]
     fn changing_a_target_branch_is_recorded_with_both_values() {
-        let store = Store::in_memory().unwrap();
-        let id = store.add_fork(&fork("dokploy")).unwrap();
+        let (store, connection) = store_with_connection();
+        let id = store.add_fork(&fork(connection, "org", "dokploy")).unwrap();
 
-        let mut changed = fork("dokploy");
+        let mut changed = fork(connection, "org", "dokploy");
         changed.branch = "canary".into();
         store.update_fork(id, &changed).unwrap();
 
-        let trail = store.audit(10).unwrap();
-        let entry = trail
-            .iter()
+        let entry = store
+            .audit(10)
+            .unwrap()
+            .into_iter()
             .find(|c| c.what == "dokploy target branch")
             .expect("the change is recorded");
         assert_eq!(entry.old_value.as_deref(), Some("main"));
@@ -659,8 +982,9 @@ mod tests {
         settings.schedule = Some("0 5 * * 5".into());
         store.save_settings(&settings).unwrap();
 
-        let trail = store.audit(10).unwrap();
-        assert!(trail
+        assert!(store
+            .audit(10)
+            .unwrap()
             .iter()
             .any(|c| c.what == "schedule" && c.new_value.as_deref() == Some("0 5 * * 5")));
     }
@@ -702,13 +1026,14 @@ mod tests {
 
     #[test]
     fn deleting_a_fork_leaves_a_record_of_what_went() {
-        let store = Store::in_memory().unwrap();
-        let id = store.add_fork(&fork("codex")).unwrap();
+        let (store, connection) = store_with_connection();
+        let id = store.add_fork(&fork(connection, "org", "codex")).unwrap();
         store.delete_fork(id).unwrap();
 
         assert!(store.forks().unwrap().is_empty());
-        let trail = store.audit(10).unwrap();
-        assert!(trail
+        assert!(store
+            .audit(10)
+            .unwrap()
             .iter()
             .any(|c| c.what == "fork removed" && c.old_value.as_deref() == Some("codex")));
     }
@@ -718,7 +1043,17 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("weir.db");
         let store = Store::open(&path).unwrap();
-        store.set_forge_token("secret").unwrap();
+        store
+            .add_connection(
+                &NewConnection {
+                    name: "home".into(),
+                    kind: "gitea".into(),
+                    url: "https://forge.example".into(),
+                    username: None,
+                },
+                "secret",
+            )
+            .unwrap();
 
         #[cfg(unix)]
         {

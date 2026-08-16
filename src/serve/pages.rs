@@ -129,6 +129,7 @@ fn shell(title: &str, current: &str, body: Markup) -> Markup {
                 header { div class="bar" {
                     h1 { "weir" }
                     a href="/" class=(if current == "home" { "on" } else { "" }) { "Forks" }
+                    a href="/connections" class=(if current == "connections" { "on" } else { "" }) { "Connections" }
                     a href="/settings" class=(if current == "settings" { "on" } else { "" }) { "Settings" }
                 }}
                 main { (body) }
@@ -169,19 +170,22 @@ pub async fn dashboard(State(app): State<App>) -> impl IntoResponse {
     let forks = app.store().forks().unwrap_or_default();
     let runs = app.store().recent_runs(15).unwrap_or_default();
     let settings = app.store().settings().unwrap_or_default();
-    let secrets = app.store().secret_status().ok();
-    let configured = !settings.forge_url.is_empty() && !settings.forge_owner.is_empty();
+    let connections = app.store().connections().unwrap_or_default();
 
     Html(
         shell(
             "forks",
             "home",
             html! {
-                @if !configured || secrets.is_none_or(|s| !s.forge_token) {
+                @if connections.is_empty() {
                     div class="note" {
-                        "Set the forge URL, owner, and token in "
-                        a href="/settings" { "Settings" }
-                        " before adding a fork — the forge cannot be reached or listed without them."
+                        "No " a href="/connections" { "connections" }
+                        " yet — add the forge your forks live on before adding a fork."
+                    }
+                } @else if connections.iter().any(|c| !c.has_token) {
+                    div class="note" {
+                        "A " a href="/connections" { "connection" }
+                        " has no token. Pushing, listing, and opening pull requests all need one."
                     }
                 }
 
@@ -246,7 +250,7 @@ fn fork_row(fork: &Fork) -> Markup {
     html! {
         tr {
             td {
-                a href={ "/forks/" (fork.id) } { (fork.repo) }
+                a href={ "/forks/" (fork.id) } { (fork.owner) "/" (fork.repo) }
                 @if !fork.enabled { " " span class="pill muted" { "disabled" } }
             }
             td class="mono small muted" { (fork.upstream) }
@@ -322,108 +326,66 @@ pub async fn run_detail(State(app): State<App>, Path(id): Path<i64>) -> impl Int
 pub async fn settings(State(app): State<App>) -> impl IntoResponse {
     let settings = app.store().settings().unwrap_or_default();
     let secrets = app.store().secret_status().ok();
+    let has_token = secrets.is_some_and(|s| s.telegram_token);
+    let has_chat = settings
+        .telegram_chat
+        .as_deref()
+        .is_some_and(|c| !c.is_empty());
 
     Html(
         shell(
             "settings",
             "settings",
             html! {
-                h2 { "Forge" }
+                h2 { "Schedule" }
                 form method="post" action="/settings" {
                     div class="card" {
-                        div class="grid2" {
-                            div {
-                                label for="forge_url" { "Gitea or Forgejo URL" }
-                                input type="text" id="forge_url" name="forge_url"
-                                      value=(settings.forge_url) placeholder="https://gitea.example.com";
-                            }
-                            div {
-                                label for="forge_owner" { "Owner (user or organisation)" }
-                                input type="text" id="forge_owner" name="forge_owner"
-                                      value=(settings.forge_owner) placeholder="my-org";
-                            }
-                            div {
-                                label for="forge_username" { "Machine account username " span class="muted" { "(optional)" } }
-                                input type="text" id="forge_username" name="forge_username"
-                                      value=(settings.forge_username.clone().unwrap_or_default())
-                                      placeholder="weir-bot";
-                            }
-                            div {
-                                label for="schedule" { "Schedule " span class="muted" { "(cron, server local time)" } }
-                                input type="text" id="schedule" name="schedule"
-                                      value=(settings.schedule.clone().unwrap_or_default())
-                                      placeholder="0 5 * * 5";
-                            }
-                        }
-                        button class="primary" type="submit" { "Save" }
-                    }
-
-                    details {
-                        summary { "Branch and file names" span class="muted small" { " — rarely changed" } }
-                        div class="details-body" {
-                            div class="grid2" {
-                                div {
-                                    label for="sync_branch" { "Sync branch" }
-                                    input type="text" id="sync_branch" name="sync_branch" value=(settings.sync_branch);
-                                }
-                                div {
-                                    label for="boundary_file" { "Boundary file" }
-                                    input type="text" id="boundary_file" name="boundary_file" value=(settings.boundary_file);
-                                }
-                            }
-                            p class="small muted" {
-                                "The sync branch is force-pushed on every run, so nothing you want to keep "
-                                "should live there. The boundary file records which upstream commit the "
-                                "fork's content matches — change its name and the next sync will think it "
-                                "has never run. Both are saved with the form above."
-                            }
-                        }
-                    }
-                }
-
-                h2 { "Credentials" }
-                div class="card" {
-                    p class="small muted" {
-                        "Stored in the database and never shown again — the field only reports whether "
-                        "one is set. That makes the database file a secret, so treat its volume as one."
-                    }
-                    form method="post" action="/settings/forge-token" {
-                        label for="forge_token" {
-                            "Gitea or Forgejo access token "
-                            @match secrets.map(|s| s.forge_token) {
-                                Some(true) => span class="ok" { "— set" },
-                                _ => span class="warn" { "— not set" },
-                            }
-                        }
-                        div class="row" {
-                            input type="password" id="forge_token" name="token"
-                                  placeholder="from Settings → Applications on your forge" style="flex:1";
-                            button type="submit" { "Replace" }
-                        }
+                        label for="schedule" { "Cron expression " span class="muted" { "(server local time; blank to disable)" } }
+                        input type="text" id="schedule" name="schedule"
+                              value=(settings.schedule.clone().unwrap_or_default())
+                              placeholder="0 5 * * 5";
                         p class="small muted" {
-                            "Belongs to a machine account with write access to the forks. Used both to "
-                            "push the sync branch and to open the pull request, so "
-                            code { "write:repository" }
-                            " is enough — it never needs admin, and it is never asked to merge anything."
+                            "Every enabled fork syncs when this comes round. Leave it empty and "
+                            "nothing runs unless you press a button."
                         }
-                    }
-                    p class="small muted" {
-                        "Nothing is needed for GitHub — public upstreams are cloned anonymously."
+
+                        details {
+                            summary { "Branch and file names" span class="muted small" { " — rarely changed" } }
+                            div class="details-body" {
+                                div class="grid2" {
+                                    div {
+                                        label for="sync_branch" { "Sync branch" }
+                                        input type="text" id="sync_branch" name="sync_branch" value=(settings.sync_branch);
+                                    }
+                                    div {
+                                        label for="boundary_file" { "Boundary file" }
+                                        input type="text" id="boundary_file" name="boundary_file" value=(settings.boundary_file);
+                                    }
+                                }
+                                p class="small muted" {
+                                    "The sync branch is force-pushed on every run, so nothing you want to "
+                                    "keep should live there. The boundary file records which upstream "
+                                    "commit each fork's content matches — rename it and the next sync "
+                                    "will think it has never run."
+                                }
+                            }
+                        }
+
+                        div style="margin-top:1rem" { button class="primary" type="submit" { "Save" } }
                     }
                 }
 
                 h2 { "Notifications" }
                 form method="post" action="/settings/telegram" {
                     div class="card" {
-                        @let has_token = secrets.is_some_and(|s| s.telegram_token);
-                        @let has_chat = settings.telegram_chat.as_deref().is_some_and(|c| !c.is_empty());
                         p class="small" {
                             @if has_token && has_chat {
                                 span class="ok" { "On" }
                                 span class="muted" { " — one message per fork per run, including failures." }
                             } @else if !has_token && !has_chat {
                                 span class="muted" {
-                                    "Off. A sync on a schedule is invisible unless it says something, so                                      this is worth setting even if you only read it once a week."
+                                    "Off. A sync on a schedule is invisible unless it says something, so \
+                                     this is worth setting even if you only read it once a week."
                                 }
                             } @else {
                                 span class="warn" { "Incomplete — nothing will be sent." }
@@ -452,7 +414,8 @@ pub async fn settings(State(app): State<App>) -> impl IntoResponse {
                             }
                         }
                         p class="small muted" {
-                            "Both are needed, or neither does anything. Clear the chat id to turn                              notifications off without discarding the token."
+                            "Both are needed, or neither does anything. Clear the chat id to turn \
+                             notifications off without discarding the token."
                         }
                         div style="margin-top:1rem" { button class="primary" type="submit" { "Save" } }
                     }
@@ -463,28 +426,206 @@ pub async fn settings(State(app): State<App>) -> impl IntoResponse {
     )
 }
 
-pub async fn new_fork(State(app): State<App>) -> impl IntoResponse {
+pub async fn connections(State(app): State<App>) -> impl IntoResponse {
+    let connections = app.store().connections().unwrap_or_default();
+    let forks = app.store().forks().unwrap_or_default();
+
+    Html(
+        shell(
+            "connections",
+            "connections",
+            html! {
+                h2 { "Connections" }
+                p class="small muted" {
+                    "A forge and the credential for it. They are one thing rather than two: the URL "
+                    "cannot reach a private repository without the token, and the token means nothing "
+                    "without the URL it belongs to. Add as many as you have."
+                }
+
+                @if connections.is_empty() {
+                    div class="note" {
+                        "Nothing here yet. Add the forge your forks live on, then add the forks."
+                    }
+                }
+
+                @for connection in &connections {
+                    @let in_use = forks.iter().filter(|f| f.connection_id == connection.id).count();
+                    details {
+                        summary {
+                            strong { (connection.name) }
+                            span class="muted small" { " — " (connection.url) }
+                            @if connection.has_token { span class="ok small" { " · token set" } }
+                            @else { span class="warn small" { " · no token" } }
+                            span class="muted small" {
+                                " · " (in_use) " fork(s)"
+                            }
+                        }
+                        div class="details-body" {
+                            form method="post" action={ "/connections/" (connection.id) } {
+                                (connection_fields(Some(connection)))
+                                button class="primary" type="submit" { "Save" }
+                            }
+                            form method="post" action={ "/connections/" (connection.id) "/delete" }
+                                 style="margin-top:.75rem" {
+                                button class="danger" type="submit" { "Remove" }
+                                span class="small muted" {
+                                    @if in_use > 0 {
+                                        " — " (in_use) " fork(s) still use this, so removing it is refused."
+                                    } @else {
+                                        " — nothing uses this."
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                h2 { "Add a connection" }
+                form method="post" action="/connections" {
+                    div class="card" {
+                        (connection_fields(None))
+                        button class="primary" type="submit" { "Add" }
+                    }
+                }
+            },
+        )
+        .into_string(),
+    )
+}
+
+fn connection_fields(connection: Option<&crate::store::Connection>) -> Markup {
+    let name = connection.map(|c| c.name.clone()).unwrap_or_default();
+    let url = connection.map(|c| c.url.clone()).unwrap_or_default();
+    let username = connection
+        .and_then(|c| c.username.clone())
+        .unwrap_or_default();
+    let kind = connection
+        .map(|c| c.kind.clone())
+        .unwrap_or_else(|| "gitea".into());
+    let has_token = connection.is_some_and(|c| c.has_token);
+
+    html! {
+        div class="grid2" {
+            div {
+                label { "Name " span class="muted" { "(how forks refer to it)" } }
+                input type="text" name="name" value=(name) placeholder="home gitea";
+            }
+            div {
+                label { "Kind" }
+                select name="kind" {
+                    option value="gitea" selected[kind == "gitea"] { "Gitea" }
+                    option value="forgejo" selected[kind == "forgejo"] { "Forgejo" }
+                }
+            }
+            div {
+                label { "URL" }
+                input type="text" name="url" value=(url) placeholder="https://gitea.example.com";
+            }
+            div {
+                label { "Machine account username " span class="muted" { "(optional)" } }
+                input type="text" name="username" value=(username) placeholder="weir-bot";
+            }
+        }
+        label {
+            "Access token "
+            @if has_token { span class="ok" { "— set" } } @else { span class="warn" { "— required" } }
+        }
+        input type="password" name="token"
+              placeholder=(if has_token { "leave blank to keep the stored one" }
+                           else { "write:repository scope is enough" });
+        p class="small muted" {
+            "Used to push the sync branch and to open the pull request, so "
+            code { "write:repository" }
+            " is enough — it never needs admin and is never asked to merge. Stored in the "
+            "database and never shown again, which makes that file a secret."
+        }
+    }
+}
+
+pub async fn new_fork(
+    State(app): State<App>,
+    axum::extract::Query(query): axum::extract::Query<super::DiscoverQuery>,
+) -> impl IntoResponse {
+    let connections = app.store().connections().unwrap_or_default();
+    let chosen = query
+        .connection
+        .or_else(|| connections.first().map(|c| c.id));
+    let owner = query.owner.clone().unwrap_or_default();
+
     // Off the async runtime. Asking the forge uses a blocking HTTP client,
     // which owns a runtime of its own; dropping that inside an async context
     // panics the worker thread.
-    let found = tokio::task::spawn_blocking(move || discover(&app))
-        .await
-        .unwrap_or_else(|error| Err(anyhow::anyhow!("discovery task failed: {error}")));
+    let found = match (chosen, owner.is_empty()) {
+        (Some(id), false) => {
+            let app = app.clone();
+            let owner = owner.clone();
+            Some(
+                tokio::task::spawn_blocking(move || discover(&app, id, &owner))
+                    .await
+                    .unwrap_or_else(|error| Err(anyhow::anyhow!("discovery failed: {error}"))),
+            )
+        }
+        _ => None,
+    };
 
     Html(
         shell(
             "add fork",
             "home",
             html! {
-                h2 { "Add a fork" }
-
-                @match &found {
-                    Ok(repos) if !repos.is_empty() => {
+                @if connections.is_empty() {
+                    div class="note" {
+                        "Add a " a href="/connections" { "connection" }
+                        " first — a fork has to live on a forge weir can reach."
+                    }
+                } @else {
+                    h2 { "Find them on the forge" }
+                    form method="get" action="/forks/new" {
                         div class="card" {
+                            div class="grid2" {
+                                div {
+                                    label { "Connection" }
+                                    select name="connection" {
+                                        @for connection in &connections {
+                                            option value=(connection.id) selected[Some(connection.id) == chosen] {
+                                                (connection.name)
+                                            }
+                                        }
+                                    }
+                                }
+                                div {
+                                    label { "Owner " span class="muted" { "(user or organisation)" } }
+                                    input type="text" name="owner" value=(owner) placeholder="my-org";
+                                }
+                            }
+                            div style="margin-top:1rem" { button type="submit" { "List repositories" } }
+                        }
+                    }
+
+                    @match &found {
+                        None => div class="card muted small" {
+                            "Pick a connection and an owner, then list what is there."
+                        }
+                        Some(Ok(repos)) if repos.is_empty() => {
+                            @let already = app.store().forks().unwrap_or_default().iter()
+                                .filter(|f| Some(f.connection_id) == chosen && f.owner == owner)
+                                .count();
+                            div class="card muted small" {
+                                @if already > 0 {
+                                    "Nothing left under that owner — all " (already)
+                                    " repository(s) there are already configured."
+                                } @else {
+                                    "No repositories visible under that owner. Check the spelling, and "
+                                    "that the account behind this connection's token can see them — a "
+                                    "token with no access to an organisation sees an empty list rather "
+                                    "than an error."
+                                }
+                            }
+                        }
+                        Some(Ok(repos)) => div class="card" {
                             p class="small muted" {
-                                "Found on the forge and not yet configured. The upstream comes from "
-                                "what the repository was migrated from, so it is usually already right — "
-                                "check it before saving."
+                                "The upstream comes from what each repository was migrated from, so it "
+                                "is usually already right. Check it before saving."
                             }
                             table { tbody { @for repo in repos {
                                 tr {
@@ -492,12 +633,14 @@ pub async fn new_fork(State(app): State<App>) -> impl IntoResponse {
                                     td class="mono small muted" {
                                         @match &repo.upstream {
                                             Some(url) => (url),
-                                            None => span class="warn" { "no upstream recorded — type it below" },
+                                            None => span class="warn" { "no upstream recorded — add it by hand" },
                                         }
                                     }
                                     td class="mono small" { (repo.default_branch) }
                                     td {
                                         form method="post" action="/forks" {
+                                            input type="hidden" name="connection_id" value=(chosen.unwrap_or_default());
+                                            input type="hidden" name="owner" value=(owner);
                                             input type="hidden" name="repo" value=(repo.name);
                                             input type="hidden" name="upstream" value=(repo.upstream.clone().unwrap_or_default());
                                             input type="hidden" name="branch" value=(repo.default_branch);
@@ -510,18 +653,16 @@ pub async fn new_fork(State(app): State<App>) -> impl IntoResponse {
                                 }
                             }}}
                         }
+                        Some(Err(error)) => div class="note small" {
+                            "Could not list repositories: " (format!("{error:#}"))
+                        }
                     }
-                    Ok(_) => div class="card muted small" { "Every repository on the forge is already configured." }
-                    Err(error) => div class="note small" {
-                        "Could not list repositories: " (format!("{error:#}"))
-                        ". Add one by hand below."
-                    }
-                }
 
-                details {
-                    summary { "Enter one by hand" span class="muted small" { " — if it is not on the forge yet" } }
-                    div class="details-body" {
-                        form method="post" action="/forks" { (fork_fields(None)) }
+                    details {
+                        summary { "Enter one by hand" span class="muted small" { " — if it is not on the forge yet" } }
+                        div class="details-body" {
+                            form method="post" action="/forks" { (fork_fields(None, &connections)) }
+                        }
                     }
                 }
             },
@@ -531,14 +672,15 @@ pub async fn new_fork(State(app): State<App>) -> impl IntoResponse {
 }
 
 pub async fn edit_fork(State(app): State<App>, Path(id): Path<i64>) -> impl IntoResponse {
+    let connections = app.store().connections().unwrap_or_default();
     match app.store().fork(id) {
         Ok(Some(fork)) => Html(
             shell(
                 "edit fork",
                 "home",
                 html! {
-                    h2 { (fork.repo) }
-                    form method="post" action={ "/forks/" (fork.id) } { (fork_fields(Some(&fork))) }
+                    h2 { (fork.owner) "/" (fork.repo) }
+                    form method="post" action={ "/forks/" (fork.id) } { (fork_fields(Some(&fork), &connections)) }
                     div class="card" {
                         form method="post" action={ "/forks/" (fork.id) "/delete" } {
                             button class="danger" type="submit" { "Remove this fork" }
@@ -557,7 +699,8 @@ pub async fn edit_fork(State(app): State<App>, Path(id): Path<i64>) -> impl Into
     }
 }
 
-fn fork_fields(fork: Option<&Fork>) -> Markup {
+fn fork_fields(fork: Option<&Fork>, connections: &[crate::store::Connection]) -> Markup {
+    let owner = fork.map(|f| f.owner.clone()).unwrap_or_default();
     let repo = fork.map(|f| f.repo.clone()).unwrap_or_default();
     let upstream = fork.map(|f| f.upstream.clone()).unwrap_or_default();
     let branch = fork.map(|f| f.branch.clone()).unwrap_or_default();
@@ -566,30 +709,45 @@ fn fork_fields(fork: Option<&Fork>) -> Markup {
         .unwrap_or_default();
     let keep_removed = fork.map(|f| f.keep_removed.join("\n")).unwrap_or_default();
     let enabled = fork.map(|f| f.enabled).unwrap_or(true);
+    let chosen = fork.map(|f| f.connection_id);
 
     html! {
         div class="card" {
             div class="grid2" {
                 div {
-                    label for="repo" { "Repository name on the forge" }
-                    input type="text" id="repo" name="repo" value=(repo) placeholder="codex";
+                    label { "Connection " span class="muted" { "(which forge it lives on)" } }
+                    select name="connection_id" {
+                        @for connection in connections {
+                            option value=(connection.id) selected[Some(connection.id) == chosen] {
+                                (connection.name)
+                            }
+                        }
+                    }
                 }
                 div {
-                    label for="upstream" { "Upstream clone URL" }
-                    input type="text" id="upstream" name="upstream" value=(upstream)
+                    label { "Owner " span class="muted" { "(user or organisation)" } }
+                    input type="text" name="owner" value=(owner) placeholder="my-org";
+                }
+                div {
+                    label { "Repository name" }
+                    input type="text" name="repo" value=(repo) placeholder="codex";
+                }
+                div {
+                    label { "Upstream clone URL" }
+                    input type="text" name="upstream" value=(upstream)
                           placeholder="https://github.com/openai/codex.git";
                 }
                 div {
-                    label for="branch" { "Branch in your fork the sync targets" }
-                    input type="text" id="branch" name="branch" value=(branch) placeholder="main";
+                    label { "Branch in your fork the sync targets" }
+                    input type="text" name="branch" value=(branch) placeholder="main";
                 }
                 div {
-                    label for="upstream_branch" { "Branch to take from upstream " span class="muted" { "(defaults to the same)" } }
-                    input type="text" id="upstream_branch" name="upstream_branch" value=(upstream_branch);
+                    label { "Branch to take from upstream " span class="muted" { "(defaults to the same)" } }
+                    input type="text" name="upstream_branch" value=(upstream_branch);
                 }
             }
-            label for="keep_removed" { "Paths this fork keeps removed " span class="muted" { "(one per line)" } }
-            textarea id="keep_removed" name="keep_removed" placeholder=".github/workflows/release.yml" { (keep_removed) }
+            label { "Paths this fork keeps removed " span class="muted" { "(one per line)" } }
+            textarea name="keep_removed" placeholder=".github/workflows/release.yml" { (keep_removed) }
             p class="small muted" {
                 "Paths you deleted on purpose that upstream keeps editing. Every upstream change "
                 "inside them is discarded — the run and the pull request say how many, so you can "
