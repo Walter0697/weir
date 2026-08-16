@@ -78,8 +78,19 @@ pub enum Sync {
 pub fn build(git: &Git, plan: &Plan, upstream_url: &str) -> Result<Sync> {
     git.add_remote("upstream", upstream_url)
         .context("adding the upstream remote")?;
+    // A watch takes the upstream branch name from the fork's own default,
+    // because that is all the forge records. Usually right, and wrong exactly
+    // when the two sides disagree — so say what to do rather than leaving a
+    // bare git error.
     git.fetch("upstream", &plan.upstream_branch)
-        .with_context(|| format!("fetching {upstream_url} at {}", plan.upstream_branch))?;
+        .with_context(|| {
+            format!(
+                "fetching {upstream_url} at {branch} — check that upstream has a branch called \
+             {branch:?}. If it uses a different name, configure this repository and set the \
+             upstream branch explicitly.",
+                branch = plan.upstream_branch
+            )
+        })?;
 
     let base_ref = format!("origin/{}", plan.base_branch);
     let upstream_ref = format!("upstream/{}", plan.upstream_branch);

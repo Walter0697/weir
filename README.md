@@ -308,6 +308,16 @@ that row and the watch picks it up again.
 - **No recorded upstream, no sync.** There is nothing to sync *from*, so it is
   skipped and said out loud.
 
+A watch reads both facts from the forge rather than guessing: the upstream from
+Gitea's `original_url`, recorded when a repository was migrated, and the branch
+from that repository's `default_branch`.
+
+Two assumptions come with that. The clone URL is `original_url` with `.git`
+appended, which holds for every forge people migrate from. And the upstream
+branch is assumed to share the fork's default branch name — true whenever a fork
+kept it, wrong if the two sides disagree, and a fetch failure that says so.
+Configure the repository and set its upstream branch to fix it permanently.
+
 **Loopback by default, on purpose.** Anything that can reach this can change
 which repositories get force-pushed.
 
