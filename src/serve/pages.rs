@@ -39,6 +39,10 @@ th { vertical-align:bottom; }
 /* The action column: hard right, and never wrapped onto two lines. */
 td:last-child { text-align:right; white-space:nowrap; }
 td:last-child form { display:inline-block; margin:0; }
+/* Icons sit on the text baseline rather than pushing the label off centre. */
+.icon { vertical-align:-2px; margin-right:.4rem; flex:none; }
+.icon-trail { margin:0 0 0 .35rem; opacity:.55; }
+a.btn, button { display:inline-flex; align-items:center; }
 th { font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:600; }
 tr:last-child td { border-bottom:none; }
 label { display:block; margin:.85rem 0 .3rem; font-size:.85rem; color:var(--muted); }
@@ -122,6 +126,51 @@ details > summary:hover { color:var(--accent); }
 .dot { display:inline-block; width:.5rem; height:.5rem; border-radius:50%;
   background:currentColor; margin-right:.4rem; vertical-align:middle; }
 "#;
+
+/// A 16px line icon, inline.
+///
+/// Inline because the page must not fetch anything at runtime, and
+/// `currentColor` because a second set of assets for dark mode is a second set
+/// of assets to keep in step.
+fn icon(name: &str) -> Markup {
+    let path = match name {
+        // A server: your own copy, on your own forge.
+        "mirrored" => {
+            "<rect x='2' y='3' width='12' height='4' rx='1'/>\
+                       <rect x='2' y='9' width='12' height='4' rx='1'/>\
+                       <path d='M4.5 5h.01M4.5 11h.01'/>"
+        }
+        // A globe: the upstream, out there somewhere.
+        "source" => {
+            "<circle cx='8' cy='8' r='6'/><path d='M2 8h12'/>\
+                     <path d='M8 2a9 9 0 0 1 0 12a9 9 0 0 1 0-12z'/>"
+        }
+        // An arrow leaving a box, for anything that opens elsewhere.
+        "external" => {
+            "<path d='M9 3h4v4'/><path d='M13 3L7 9'/>\
+                       <path d='M11 9v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h3'/>"
+        }
+        "play" => "<path d='M5 3.5v9l7-4.5z'/>",
+        _ => "",
+    };
+    maud::PreEscaped(format!(
+        "<svg class=\"icon\" viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" \
+         stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linecap=\"round\" \
+         stroke-linejoin=\"round\" aria-hidden=\"true\">{path}</svg>"
+    ))
+}
+
+/// The small arrow that marks a link as leaving the page.
+fn icon_trail() -> Markup {
+    maud::PreEscaped(
+        "<svg class=\"icon icon-trail\" viewBox=\"0 0 16 16\" width=\"11\" height=\"11\" \
+         fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" \
+         stroke-linejoin=\"round\" aria-hidden=\"true\"><path d='M9 3h4v4'/>\
+         <path d='M13 3L7 9'/><path d='M11 9v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h3'/>\
+         </svg>"
+            .to_string(),
+    )
+}
 
 fn shell(title: &str, current: &str, body: Markup) -> Markup {
     html! {
@@ -784,24 +833,31 @@ pub async fn edit_fork(State(app): State<App>, Path(id): Path<i64>) -> impl Into
                 "home",
                 html! {
                     h2 { (fork.owner) "/" (fork.repo) }
-                    div class="card row" {
-                        @if let Some(connection) = connections.iter().find(|c| c.id == fork.connection_id) {
+                    h2 { "Links" }
+                    div class="card" {
+                        div class="row" {
+                            @if let Some(connection) = connections.iter().find(|c| c.id == fork.connection_id) {
+                                a class="btn" target="_blank" rel="noreferrer"
+                                   href=(super::mirrored_url(&connection.url, &fork.owner, &fork.repo)) {
+                                    (icon("mirrored")) "Mirrored page" (icon_trail())
+                                }
+                            }
                             a class="btn" target="_blank" rel="noreferrer"
-                               href=(super::mirrored_url(&connection.url, &fork.owner, &fork.repo)) {
-                                "Mirrored page ↗"
+                               href=(super::browse_url(&fork.upstream)) {
+                                (icon("source")) "Source page" (icon_trail())
+                            }
+                            form method="post" action="/run" style="display:inline" {
+                                input type="hidden" name="repo" value=(fork.repo);
+                                input type="hidden" name="dry_run" value="1";
+                                button type="submit" { (icon("play")) "Dry run" }
                             }
                         }
-                        a class="btn" target="_blank" rel="noreferrer"
-                           href=(super::browse_url(&fork.upstream)) { "Source page ↗" }
-                        form method="post" action="/run" style="display:inline" {
-                            input type="hidden" name="repo" value=(fork.repo);
-                            input type="hidden" name="dry_run" value="1";
-                            button type="submit" { "Dry run" }
-                        }
-                        span class="small muted" {
-                            "Mirrored is your copy on the forge; source is what it syncs from."
+                        p class="small muted" style="margin:.75rem 0 0" {
+                            "Mirrored is your copy on the forge. Source is the upstream it syncs from."
                         }
                     }
+
+                    h2 { "Settings" }
                     form method="post" action={ "/forks/" (fork.id) } { (fork_fields(Some(&fork), &connections)) }
                     div class="card" {
                         form method="post" action={ "/forks/" (fork.id) "/delete" } {
@@ -1189,19 +1245,34 @@ pub async fn repo_detail(
                             td {}
                         }
                     }}
-                    div class="row" style="margin-top:1rem" {
+                }
+
+                h2 { "Links" }
+                div class="card" {
+                    div class="row" {
                         @if let Ok(Some(connection)) = app.store().connection(target.connection_id) {
                             a class="btn" target="_blank" rel="noreferrer"
                                href=(super::mirrored_url(&connection.url, &target.owner, &target.repo)) {
-                                "Mirrored page ↗"
+                                (icon("mirrored")) "Mirrored page" (icon_trail())
                             }
                         }
                         a class="btn" target="_blank" rel="noreferrer"
-                           href=(super::browse_url(&target.upstream)) { "Source page ↗" }
+                           href=(super::browse_url(&target.upstream)) {
+                            (icon("source")) "Source page" (icon_trail())
+                        }
+                    }
+                    p class="small muted" style="margin:.75rem 0 0" {
+                        "Mirrored is your copy on the forge. Source is the upstream it syncs from."
+                    }
+                }
+
+                h2 { "Actions" }
+                div class="card" {
+                    div class="row" {
                         form method="post" action="/run" style="display:inline" {
                             input type="hidden" name="repo" value=(target.repo);
                             input type="hidden" name="dry_run" value="1";
-                            button type="submit" { "Dry run" }
+                            button type="submit" { (icon("play")) "Dry run" }
                         }
                         form method="post" action="/forks/promote" style="display:inline" {
                             input type="hidden" name="connection_id" value=(target.connection_id);
