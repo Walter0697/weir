@@ -27,6 +27,38 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+/// The mark, compiled in.
+///
+/// Baked into the binary rather than served from a directory: the page fetches
+/// nothing at runtime, so there is no asset path to get wrong, nothing to mount,
+/// and the icon cannot go missing in a deployment that copied only the binary.
+const ICON_96: &[u8] = include_bytes!("../../assets/weir-96.png");
+const ICON_32: &[u8] = include_bytes!("../../assets/weir-32.png");
+
+fn png(bytes: &'static [u8]) -> Response {
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "image/png"),
+            // It only changes when the binary does, and the binary is the
+            // thing being redeployed.
+            (
+                axum::http::header::CACHE_CONTROL,
+                "public, max-age=86400, immutable",
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+async fn icon_png() -> Response {
+    png(ICON_96)
+}
+
+async fn favicon_png() -> Response {
+    png(ICON_32)
+}
+
 #[derive(Clone)]
 pub struct App {
     store: Arc<Store>,
@@ -85,6 +117,8 @@ pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
         .route("/watches/{id}/include", post(include_repo))
         .route("/run", post(trigger_run))
         .route("/cancel", post(cancel_run))
+        .route("/icon.png", get(icon_png))
+        .route("/favicon.png", get(favicon_png))
         .route("/repo/{owner}/{repo}", get(pages::repo_detail))
         .route("/runs/{id}", get(pages::run_detail))
         .with_state(app)

@@ -27,7 +27,10 @@ header { border-bottom:1px solid var(--line); }
 header .bar { max-width:62rem; margin:0 auto; padding:.9rem 1.25rem; display:flex; gap:1.25rem; align-items:baseline; }
 header a { color:var(--fg); text-decoration:none; opacity:.7; }
 header a:hover, header a.on { opacity:1; }
-h1 { font-size:1.05rem; margin:0 1rem 0 0; letter-spacing:.02em; }
+h1 { font-size:1.05rem; margin:0; letter-spacing:.02em; }
+.brand { display:flex; align-items:center; gap:.55rem; margin-right:1rem; opacity:1; }
+.brand img { border-radius:6px; display:block; }
+.brand:hover { opacity:1; }
 h2 { font-size:.95rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:2rem 0 .75rem; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:1rem 1.1rem; margin-bottom:1rem; }
 table { width:100%; border-collapse:collapse; }
@@ -180,11 +183,16 @@ fn shell(title: &str, current: &str, body: Markup) -> Markup {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { "weir — " (title) }
+                link rel="icon" type="image/png" href="/favicon.png";
+                link rel="apple-touch-icon" href="/icon.png";
                 style { (maud::PreEscaped(STYLE)) }
             }
             body {
                 header { div class="bar" {
-                    h1 { "weir" }
+                    a href="/" class="brand" {
+                        img src="/icon.png" alt="" width="26" height="26";
+                        h1 { "weir" }
+                    }
                     a href="/" class=(if current == "home" { "on" } else { "" }) { "Forks" }
                     a href="/watches" class=(if current == "watches" { "on" } else { "" }) { "Watches" }
                     a href="/connections" class=(if current == "connections" { "on" } else { "" }) { "Connections" }

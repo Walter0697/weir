@@ -70,8 +70,13 @@ pub async fn guard(State(auth): State<Auth>, request: Request, next: Next) -> Re
     if !auth.required() {
         return next.run(request).await;
     }
-    // The login form itself has to be reachable, or there is no way in.
-    if request.uri().path() == "/login" {
+    // The login form has to be reachable or there is no way in, and its icon
+    // with it — a sign-in page that redirects its own favicon to itself is a
+    // small thing done badly.
+    if matches!(
+        request.uri().path(),
+        "/login" | "/icon.png" | "/favicon.png"
+    ) {
         return next.run(request).await;
     }
     match cookie_value(&request) {
@@ -121,6 +126,7 @@ fn page(problem: Option<&str>) -> Response {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { "weir — sign in" }
+                link rel="icon" type="image/png" href="/favicon.png";
                 style {
                     r#":root{color-scheme:light dark;--bg:#fbfbfa;--fg:#1a1a1a;--card:#fff;
                        --line:#e3e3e0;--accent:#2f6f4f;--bad:#a33}
@@ -131,7 +137,9 @@ fn page(problem: Option<&str>) -> Response {
                        font:15px/1.55 ui-sans-serif,system-ui,sans-serif}
                        form{background:var(--card);border:1px solid var(--line);border-radius:12px;
                        padding:1.5rem;width:min(22rem,92vw)}
-                       h1{font-size:1rem;margin:0 0 1rem}
+                       h1{font-size:1rem;margin:0}
+                       .brand{display:flex;align-items:center;gap:.6rem;margin:0 0 1.1rem}
+                       .brand img{border-radius:8px;display:block}
                        input{width:100%;box-sizing:border-box;padding:.55rem .7rem;font:inherit;
                        border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--fg)}
                        button{margin-top:.9rem;width:100%;padding:.55rem;font:inherit;border-radius:7px;
@@ -142,7 +150,10 @@ fn page(problem: Option<&str>) -> Response {
             }
             body {
                 form method="post" action="/login" {
-                    h1 { "weir" }
+                    div class="brand" {
+                        img src="/icon.png" alt="" width="34" height="34";
+                        h1 { "weir" }
+                    }
                     label for="token" { "Access token" }
                     input type="password" id="token" name="token" autofocus;
                     button type="submit" { "Sign in" }

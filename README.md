@@ -1,7 +1,11 @@
-# weir
-
-Keeps a fork on a self-hosted forge in step with its upstream, and puts the
-result in a pull request instead of merging it.
+<div align="center">
+  <img src="assets/weir-512.png" alt="" width="128" height="128">
+  <h1>weir</h1>
+  <p>
+    Keeps a fork on a self-hosted forge in step with its upstream, and puts the
+    result in a pull request instead of merging it.
+  </p>
+</div>
 
 > **Status: usable, early.** It clones, merges, builds and pushes the branch, and
 > opens, refreshes, or retires the pull request. Run it once from a cron or CI
