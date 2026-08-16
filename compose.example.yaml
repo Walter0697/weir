@@ -41,6 +41,14 @@ services:
       - "127.0.0.1:8080:8080"
 
     volumes:
+      # A *named* volume on purpose. Docker gives it the image user's
+      # ownership, so the unprivileged user inside can write to it.
+      #
+      # Bind mount a host directory here instead and it keeps the host's
+      # ownership, which that user cannot write — the container then exits
+      # immediately with "unable to open database file". If you want a bind
+      # mount, add `user: "1000:1000"` (matching `id -u`) and `HOME=/tmp`.
+      #
       # Holds the forge token. Treat this volume as a secret.
       - weir-data:/data
 
