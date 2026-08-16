@@ -313,9 +313,12 @@ fn watched_row(watch_id: i64, owner: &str, target: &super::Planned) -> Markup {
                     input type="hidden" name="repo" value=(target.repo);
                     button type="submit" { "Stop syncing" }
                 }
-                form method="get" action="/forks/new" style="display:inline" {
-                    input type="hidden" name="connection" value=(target.connection_id);
+                form method="post" action="/forks/promote" style="display:inline" {
+                    input type="hidden" name="connection_id" value=(target.connection_id);
                     input type="hidden" name="owner" value=(target.owner);
+                    input type="hidden" name="repo" value=(target.repo);
+                    input type="hidden" name="upstream" value=(target.upstream);
+                    input type="hidden" name="branch" value=(target.branch);
                     button type="submit" { "Configure" }
                 }
             }

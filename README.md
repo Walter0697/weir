@@ -287,9 +287,14 @@ walter-opensource/codex     configured                 [Dry run] [Remove]
 walter-opensource/dokploy   watch on walter-opensource [Stop syncing] [Configure]
 ```
 
-**Configure** promotes a watched repository to a fork of its own, which is how
-it gains settings a watch cannot carry — `keep_removed`, or a different upstream
-branch.
+**Configure** promotes a watched repository to a fork of its own and opens its
+settings. That is how one repository gains what a watch cannot carry —
+`keep_removed`, or a different upstream branch — without retyping what the watch
+already worked out.
+
+Nothing about what gets synced changes: it was already covered, and an explicit
+fork wins over a watch, so it is covered by a row instead of by the rule. Remove
+that row and the watch picks it up again.
 
 - **Exceptions** you write. Names, or `*` patterns like `test-*`. A bare `*`
   excepts everything, which pauses a watch without losing what you wrote.

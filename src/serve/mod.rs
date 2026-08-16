@@ -58,6 +58,7 @@ pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
         .route("/connections/{id}/delete", post(delete_connection))
         .route("/forks/new", get(pages::new_fork))
         .route("/forks", post(create_fork))
+        .route("/forks/promote", post(promote_fork))
         .route("/forks/{id}", get(pages::edit_fork).post(update_fork))
         .route("/forks/{id}/delete", post(delete_fork))
         .route("/watches", get(pages::watches).post(create_watch))
@@ -525,6 +526,51 @@ async fn create_fork(
     match app.store.add_fork(&fork) {
         Ok(_) => Redirect::to("/").into_response(),
         Err(error) => pages::error_page("Could not add the fork", &format!("{error:#}")),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct PromoteForm {
+    connection_id: i64,
+    owner: String,
+    repo: String,
+    upstream: String,
+    branch: String,
+}
+
+/// Turns a watched repository into a fork of its own and opens its settings.
+///
+/// A watch carries no per-repository settings — it cannot, since it is a rule
+/// that expands to whatever is there. This is how one repository steps out of
+/// the rule and gains `keep_removed` or a different upstream branch, without
+/// anyone retyping what the watch already worked out.
+///
+/// Nothing changes about what gets synced: the repository was already covered.
+/// It simply stops being covered by the rule and starts being covered by a row,
+/// which the expansion already prefers.
+async fn promote_fork(
+    State(app): State<App>,
+    axum::Form(form): axum::Form<PromoteForm>,
+) -> impl IntoResponse {
+    let fork = NewFork {
+        connection_id: form.connection_id,
+        owner: form.owner.trim().to_string(),
+        repo: form.repo.trim().to_string(),
+        upstream: form.upstream.trim().to_string(),
+        branch: form.branch.trim().to_string(),
+        upstream_branch: None,
+        keep_removed: Vec::new(),
+        enabled: true,
+    };
+    match app.store.add_fork(&fork) {
+        Ok(id) => Redirect::to(&format!("/forks/{id}")).into_response(),
+        Err(error) => pages::error_page(
+            "Could not configure that repository",
+            &format!(
+                "{error:#}\n\nIf it already has a fork of its own, open it from the Forks page \
+                 instead."
+            ),
+        ),
     }
 }
 
