@@ -948,6 +948,27 @@ pub fn mirrored_url(connection_url: &str, owner: &str, repo: &str) -> String {
     format!("{}/{owner}/{repo}", connection_url.trim_end_matches('/'))
 }
 
+/// When a schedule will next fire, and in which zone.
+///
+/// Shown rather than described, because "server local time" is ambiguous about
+/// *which* server: this process reads the clock of whatever it runs in, and a
+/// container is usually UTC while the host it sits on usually is not. Four
+/// hours of difference is invisible in a cron expression and obvious in a date.
+pub fn next_occurrence(expression: &str) -> Option<(String, String)> {
+    let cron = parse_cron(expression).ok()?;
+    let now = chrono::Local::now();
+    let next = cron.find_next_occurrence(&now, false).ok()?;
+    // `%Z` gives a bare offset when the zone has no name, which is what a
+    // container without TZ set looks like. Say UTC when that is what it means.
+    let offset = now.format("%:z").to_string();
+    let zone = if offset == "+00:00" {
+        "UTC".to_string()
+    } else {
+        format!("UTC{offset}")
+    };
+    Some((next.format("%A %-d %B %Y at %H:%M").to_string(), zone))
+}
+
 pub fn parse_cron(expression: &str) -> std::result::Result<croner::Cron, String> {
     croner::Cron::new(expression)
         .parse()

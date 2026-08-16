@@ -333,7 +333,13 @@ pub async fn dashboard(State(app): State<App>) -> impl IntoResponse {
                 div class="card small" {
                     @match &settings.schedule {
                         Some(cron) => {
-                            "Scheduled " code { (cron) } " — server local time. "
+                            "Scheduled " code { (cron) } ". "
+                            @match super::next_occurrence(cron) {
+                                Some((when, zone)) => {
+                                    "Next run " strong { (when) } " " (zone) ". "
+                                }
+                                None => span class="warn" { "That expression never fires. " }
+                            }
                             a href="/settings" { "Change" }
                         }
                         None => {
@@ -492,13 +498,23 @@ pub async fn settings(State(app): State<App>) -> impl IntoResponse {
                 h2 { "Schedule" }
                 form method="post" action="/settings" {
                     div class="card" {
-                        label for="schedule" { "Cron expression " span class="muted" { "(server local time; blank to disable)" } }
+                        label for="schedule" { "Cron expression " span class="muted" { "(blank to disable)" } }
                         input type="text" id="schedule" name="schedule"
                               value=(settings.schedule.clone().unwrap_or_default())
                               placeholder="0 5 * * 5";
                         p class="small muted" {
                             "Every enabled fork syncs when this comes round. Leave it empty and "
                             "nothing runs unless you press a button."
+                        }
+                        @match settings.schedule.as_deref().and_then(super::next_occurrence) {
+                            Some((when, zone)) => p class="small" {
+                                "Next run " strong { (when) } " " (zone) "."
+                                span class="muted" {
+                                    " That is this process's own clock — a container is usually UTC \
+                                     even when the host it runs on is not."
+                                }
+                            },
+                            None => {}
                         }
 
                         details {
