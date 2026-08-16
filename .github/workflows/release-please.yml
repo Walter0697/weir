@@ -3,6 +3,9 @@ name: Release Please
 on:
   push:
     branches: [main]
+  # So a run blocked by something outside the workflow — a repository setting,
+  # a rate limit — can be retried without an empty commit to provoke it.
+  workflow_dispatch:
 
 permissions:
   contents: write
