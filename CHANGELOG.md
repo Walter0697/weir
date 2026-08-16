@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Walter0697/weir/compare/v0.3.1...v0.4.0) (2026-08-16)
+
+
+### Features
+
+* give each row a dots menu, with sync and dry run in it ([8ed0f58](https://github.com/Walter0697/weir/commit/8ed0f5812846e21fff30c6902ed377aa2ee3c52c))
+
 ## [0.3.1](https://github.com/Walter0697/weir/compare/v0.3.0...v0.3.1) (2026-08-16)
 
 
