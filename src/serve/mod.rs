@@ -115,8 +115,16 @@ impl App {
         Ok(ForgeSpec {
             url: connection.url,
             owner: fork.owner.clone(),
-            username: connection.username,
+            username: connection.username.clone(),
             token: self.store.connection_token(fork.connection_id)?,
+            commit_identity: connection.commit_email.map(|email| {
+                (
+                    connection
+                        .username
+                        .unwrap_or_else(|| "weir[bot]".to_string()),
+                    email,
+                )
+            }),
         })
     }
 
@@ -357,6 +365,8 @@ pub struct ConnectionForm {
     url: String,
     username: String,
     #[serde(default)]
+    commit_email: String,
+    #[serde(default)]
     token: String,
 }
 
@@ -368,6 +378,7 @@ impl ConnectionForm {
                 kind: self.kind.trim().to_string(),
                 url: self.url.trim().trim_end_matches('/').to_string(),
                 username: blank_to_none(&self.username),
+                commit_email: blank_to_none(&self.commit_email),
             },
             self.token,
         )

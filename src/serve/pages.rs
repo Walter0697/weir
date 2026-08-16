@@ -589,6 +589,9 @@ fn connection_fields(connection: Option<&crate::store::Connection>) -> Markup {
     let username = connection
         .and_then(|c| c.username.clone())
         .unwrap_or_default();
+    let commit_email = connection
+        .and_then(|c| c.commit_email.clone())
+        .unwrap_or_default();
     let kind = connection
         .map(|c| c.kind.clone())
         .unwrap_or_else(|| "gitea".into());
@@ -615,6 +618,11 @@ fn connection_fields(connection: Option<&crate::store::Connection>) -> Markup {
                 label { "Machine account username " span class="muted" { "(optional)" } }
                 input type="text" name="username" value=(username) placeholder="weir-bot";
             }
+            div {
+                label { "Commit email " span class="muted" { "(optional)" } }
+                input type="text" name="commit_email" value=(commit_email)
+                      placeholder="the machine account's own address";
+            }
         }
         label {
             "Access token "
@@ -628,6 +636,12 @@ fn connection_fields(connection: Option<&crate::store::Connection>) -> Markup {
             code { "write:repository" }
             " is enough — it never needs admin and is never asked to merge. Stored in the "
             "database and never shown again, which makes that file a secret."
+        }
+        p class="small muted" {
+            "The commit email decides who the sync's own commits appear to be from. Forges match "
+            "commits to accounts by address, so leaving it blank gives a bare name with nothing to "
+            "click; set it to the machine account's own address and the commits show up as that "
+            "account. The username above is used as the display name."
         }
     }
 }

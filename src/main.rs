@@ -160,6 +160,7 @@ fn run(config_path: &Path, only: Option<&str>, dry_run: bool) -> Result<()> {
         owner: config.forge.owner.clone(),
         username: config.forge.username.clone(),
         token,
+        commit_identity: None,
     };
     let options = Options {
         sync_branch: config.defaults.sync_branch.clone(),

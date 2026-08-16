@@ -55,6 +55,13 @@ pub struct Connection {
     pub kind: String,
     pub url: String,
     pub username: Option<String>,
+    /// Who the merge and boundary commits are attributed to.
+    ///
+    /// Forges match commits to accounts by **email**, so an address no account
+    /// owns produces a bare name with no avatar and no link. Setting this to
+    /// the machine account's own address is what makes a sync commit show up as
+    /// that account rather than as an anonymous string.
+    pub commit_email: Option<String>,
     /// Reported, never returned. Use [`Store::connection_token`] deliberately.
     pub has_token: bool,
 }
@@ -65,6 +72,7 @@ pub struct NewConnection {
     pub kind: String,
     pub url: String,
     pub username: Option<String>,
+    pub commit_email: Option<String>,
 }
 
 /// Whether a secret is present, without carrying it around.
@@ -265,6 +273,17 @@ impl Store {
                 [],
             )?;
         }
+        let connection_columns: Vec<String> = {
+            let mut statement = conn.prepare("PRAGMA table_info(connections)")?;
+            let names = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            names
+        };
+        if !connection_columns.iter().any(|c| c == "commit_email") {
+            conn.execute("ALTER TABLE connections ADD COLUMN commit_email TEXT", [])?;
+        }
+
         if !fork_columns.iter().any(|c| c == "owner") {
             conn.execute(
                 "ALTER TABLE forks ADD COLUMN owner TEXT NOT NULL DEFAULT ''",
@@ -305,7 +324,7 @@ impl Store {
     pub fn connections(&self) -> Result<Vec<Connection>> {
         let conn = self.conn.lock().expect("the store lock is never poisoned");
         let mut statement = conn.prepare(
-            "SELECT id, name, kind, url, username,
+            "SELECT id, name, kind, url, username, commit_email,
                     CASE WHEN token IS NULL OR trim(token) = '' THEN 0 ELSE 1 END
              FROM connections ORDER BY name",
         )?;
@@ -317,7 +336,8 @@ impl Store {
                     kind: row.get(2)?,
                     url: row.get(3)?,
                     username: row.get(4)?,
-                    has_token: row.get::<_, i64>(5)? != 0,
+                    commit_email: row.get(5)?,
+                    has_token: row.get::<_, i64>(6)? != 0,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -332,9 +352,16 @@ impl Store {
         let id = {
             let conn = self.conn.lock().expect("the store lock is never poisoned");
             conn.execute(
-                "INSERT INTO connections (name, kind, url, username, token)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![new.name, new.kind, new.url, new.username, token],
+                "INSERT INTO connections (name, kind, url, username, commit_email, token)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    new.name,
+                    new.kind,
+                    new.url,
+                    new.username,
+                    new.commit_email,
+                    token
+                ],
             )
             .with_context(|| format!("adding connection {:?}", new.name))?;
             conn.last_insert_rowid()
@@ -350,8 +377,17 @@ impl Store {
         {
             let conn = self.conn.lock().expect("the store lock is never poisoned");
             conn.execute(
-                "UPDATE connections SET name = ?1, kind = ?2, url = ?3, username = ?4 WHERE id = ?5",
-                params![new.name, new.kind, new.url, new.username, id],
+                "UPDATE connections SET name = ?1, kind = ?2, url = ?3, username = ?4,
+                        commit_email = ?5
+                 WHERE id = ?6",
+                params![
+                    new.name,
+                    new.kind,
+                    new.url,
+                    new.username,
+                    new.commit_email,
+                    id
+                ],
             )?;
             if !token.trim().is_empty() {
                 conn.execute(
@@ -863,6 +899,7 @@ mod tests {
                     kind: "gitea".into(),
                     url: "https://forge.example".into(),
                     username: Some("weir-bot".into()),
+                    commit_email: Some("weir-bot@example.invalid".into()),
                 },
                 "secret-token-value",
             )
@@ -930,6 +967,7 @@ mod tests {
             kind: "gitea".into(),
             url: "https://forge.example".into(),
             username: None,
+            commit_email: None,
         };
         store.update_connection(id, &renamed, "   ").unwrap();
 
@@ -952,6 +990,7 @@ mod tests {
                     kind: "gitea".into(),
                     url: "https://forge.example".into(),
                     username: None,
+                    commit_email: None,
                 },
                 "a-different-secret",
             )
@@ -973,6 +1012,7 @@ mod tests {
                     kind: "gitea".into(),
                     url: "https://forge.example".into(),
                     username: None,
+                    commit_email: None,
                 },
                 "   ",
             )
@@ -1009,6 +1049,7 @@ mod tests {
                     kind: "forgejo".into(),
                     url: "https://other.example".into(),
                     username: None,
+                    commit_email: None,
                 },
                 "another-token",
             )
@@ -1198,6 +1239,7 @@ mod tests {
                     kind: "gitea".into(),
                     url: "https://forge.example".into(),
                     username: None,
+                    commit_email: None,
                 },
                 "secret",
             )

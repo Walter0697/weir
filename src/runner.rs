@@ -34,6 +34,13 @@ pub struct ForgeSpec {
     pub owner: String,
     pub username: Option<String>,
     pub token: Option<String>,
+    /// Name and email for the commits a sync writes.
+    ///
+    /// Forges match commits to accounts by email, so leaving this unset gives a
+    /// bare author string with no avatar and nothing to click. Setting it to
+    /// the machine account's own address makes a sync look like that account
+    /// did it, which is true.
+    pub commit_identity: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,7 +122,13 @@ pub fn sync_fork(
     let checkout = workspace.path().join(&fork.repo);
 
     let url = clone_url(forge_spec, &fork.repo);
-    let git = Git::clone_repo(&url, &fork.branch, &checkout, credential, cancel.clone())?;
+    let mut git = Git::clone_repo(&url, &fork.branch, &checkout, credential, cancel.clone())?;
+    if let Some((name, email)) = &forge_spec.commit_identity {
+        git = git.with_identity(crate::git::Identity {
+            name: name.clone(),
+            email: email.clone(),
+        });
+    }
 
     let plan = Plan {
         base_branch: fork.branch.clone(),
@@ -282,6 +295,7 @@ mod tests {
             owner: "org".to_string(),
             username: username.map(str::to_string),
             token: None,
+            commit_identity: None,
         }
     }
 
