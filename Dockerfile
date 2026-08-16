@@ -16,6 +16,8 @@ RUN mkdir -p src \
  && rm -rf src
 
 COPY src ./src
+# The icon is compiled into the binary, so the build needs it present.
+COPY assets ./assets
 # Touch the entry points so cargo does not reuse the stubs above.
 RUN touch src/main.rs src/lib.rs \
  && cargo build --release --locked \
