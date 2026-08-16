@@ -748,6 +748,31 @@ impl Store {
         Ok(runs)
     }
 
+    /// Recent runs for one repository, so its own page can show its history
+    /// rather than making somebody scan the whole list for the name.
+    pub fn runs_for(&self, repo: &str, limit: usize) -> Result<Vec<Run>> {
+        let conn = self.conn.lock().expect("the store lock is never poisoned");
+        let mut statement = conn.prepare(
+            "SELECT id, started_at, finished_at, repo, dry_run, outcome, detail, pr_url
+             FROM runs WHERE repo = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let runs = statement
+            .query_map(params![repo, limit as i64], |row| {
+                Ok(Run {
+                    id: row.get(0)?,
+                    started_at: row.get(1)?,
+                    finished_at: row.get(2)?,
+                    repo: row.get(3)?,
+                    dry_run: row.get::<_, i64>(4)? != 0,
+                    outcome: row.get(5)?,
+                    detail: row.get(6)?,
+                    pr_url: row.get(7)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(runs)
+    }
+
     pub fn run(&self, id: i64) -> Result<Option<Run>> {
         let conn = self.conn.lock().expect("the store lock is never poisoned");
         let run = conn

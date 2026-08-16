@@ -68,6 +68,7 @@ pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
         .route("/watches/{id}/include", post(include_repo))
         .route("/run", post(trigger_run))
         .route("/cancel", post(cancel_run))
+        .route("/repo/{owner}/{repo}", get(pages::repo_detail))
         .route("/runs/{id}", get(pages::run_detail))
         .with_state(app)
         .route("/login", get(auth::login_page).post(auth::login))

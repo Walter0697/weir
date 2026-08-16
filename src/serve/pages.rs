@@ -10,7 +10,7 @@ use super::{discover, App};
 use crate::store::{Fork, Run};
 use crate::watch::Skipped;
 use axum::extract::{Path, State};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use maud::{html, Markup, DOCTYPE};
 
 const STYLE: &str = r#"
@@ -304,7 +304,11 @@ pub async fn dashboard(State(app): State<App>) -> impl IntoResponse {
 fn watched_row(watch_id: i64, owner: &str, target: &super::Planned) -> Markup {
     html! {
         tr {
-            td { (target.owner) "/" (target.repo) }
+            td {
+                a href={ "/repo/" (target.owner) "/" (target.repo) } {
+                    (target.owner) "/" (target.repo)
+                }
+            }
             td class="mono small muted" { (target.upstream) }
             td class="mono small" { (target.branch) }
             td class="small muted" { "watch on " (owner) }
@@ -1078,4 +1082,125 @@ fn watch_fields(
         }
         div style="margin-top:1rem" {}
     }
+}
+
+/// A repository that a watch covers, which therefore has no row to edit.
+///
+/// One configured by hand is redirected to its own settings instead — the name
+/// in the list points here either way, so clicking it always leads somewhere
+/// rather than depending on how the repository happened to get into the list.
+pub async fn repo_detail(
+    State(app): State<App>,
+    Path((owner, repo)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if let Ok(forks) = app.store().forks() {
+        if let Some(fork) = forks.iter().find(|f| f.owner == owner && f.repo == repo) {
+            return Redirect::to(&format!("/forks/{}", fork.id)).into_response();
+        }
+    }
+
+    let watches = app.store().watches().unwrap_or_default();
+    let found = {
+        let app = app.clone();
+        let owner = owner.clone();
+        let repo = repo.clone();
+        let watches: Vec<_> = watches
+            .into_iter()
+            .filter(|w| w.enabled && w.owner == owner)
+            .collect();
+        tokio::task::spawn_blocking(move || {
+            watches.into_iter().find_map(|watch| {
+                super::expand(&app, &watch).ok().and_then(|expansion| {
+                    expansion
+                        .covered
+                        .into_iter()
+                        .find(|t| t.repo == repo)
+                        .map(|target| (watch, target))
+                })
+            })
+        })
+        .await
+        .unwrap_or(None)
+    };
+
+    let Some((watch, target)) = found else {
+        return error_page(
+            "Nothing here",
+            "No fork is configured for that repository, and no watch currently covers it. \
+             It may have been excepted, or removed from the forge.",
+        );
+    };
+
+    let runs = app.store().runs_for(&repo, 10).unwrap_or_default();
+
+    Html(
+        shell(
+            "repository",
+            "home",
+            html! {
+                h2 { (target.owner) "/" (target.repo) }
+                div class="card" {
+                    table { tbody {
+                        tr { td class="muted small" { "Upstream" } td class="mono small" { (target.upstream) } td {} }
+                        tr { td class="muted small" { "Branch" } td class="mono small" { (target.branch) } td {} }
+                        tr {
+                            td class="muted small" { "Covered by" }
+                            td class="small" { "the watch on " a href="/watches" { (watch.owner) } }
+                            td {}
+                        }
+                        tr {
+                            td class="muted small" { "Settings" }
+                            td class="small muted" {
+                                "None of its own. A watch is a rule, so it carries no per-repository \
+                                 settings — configure it to give it some."
+                            }
+                            td {}
+                        }
+                    }}
+                    div class="row" style="margin-top:1rem" {
+                        form method="post" action="/run" style="display:inline" {
+                            input type="hidden" name="repo" value=(target.repo);
+                            input type="hidden" name="dry_run" value="1";
+                            button type="submit" { "Dry run" }
+                        }
+                        form method="post" action="/forks/promote" style="display:inline" {
+                            input type="hidden" name="connection_id" value=(target.connection_id);
+                            input type="hidden" name="owner" value=(target.owner);
+                            input type="hidden" name="repo" value=(target.repo);
+                            input type="hidden" name="upstream" value=(target.upstream);
+                            input type="hidden" name="branch" value=(target.branch);
+                            button class="primary" type="submit" { "Configure" }
+                        }
+                        form method="post" action={ "/watches/" (watch.id) "/except" } style="display:inline" {
+                            input type="hidden" name="repo" value=(target.repo);
+                            button class="danger" type="submit" { "Stop syncing" }
+                        }
+                    }
+                }
+
+                h2 { "Its runs" }
+                @if runs.is_empty() {
+                    div class="card muted small" { "It has not been synced yet." }
+                } @else {
+                    div class="card" { table {
+                        thead { tr { th { "Started" } th { "Result" } th {} } }
+                        tbody { @for run in &runs {
+                            tr {
+                                td class="small mono muted" { (run.started_at.get(..16).unwrap_or(&run.started_at)) }
+                                td class=(outcome_class(run.outcome.as_deref())) {
+                                    (run.outcome.clone().unwrap_or_else(|| "running…".into()))
+                                    @if run.dry_run { " " span class="pill muted" { "dry" } }
+                                }
+                                td { a class="small" href={ "/runs/" (run.id) } { "Details" } }
+                            }
+                        }}
+                    }}
+                }
+
+                a class="btn" href="/" { "Back" }
+            },
+        )
+        .into_string(),
+    )
+    .into_response()
 }
