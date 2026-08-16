@@ -9,8 +9,112 @@
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+/// A request to stop, shared with whatever is doing the work.
+///
+/// Cancellation here is cooperative and has to be: the work is child `git`
+/// processes and blocking HTTP, and a blocking task cannot be interrupted from
+/// outside. What this buys is a flag that long steps poll, and a child process
+/// that gets killed rather than waited out — a fresh clone of a large upstream
+/// is a minute on its own, so a stop that only took effect between repositories
+/// would not feel like stopping at all.
+#[derive(Clone, Default)]
+pub struct Cancel(Arc<AtomicBool>);
+
+/// Returned when a step stopped because it was asked to, rather than because
+/// anything went wrong. Callers downcast for it to tell the two apart.
+#[derive(Debug)]
+pub struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cancelled")
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+impl Cancel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    /// `Err(Cancelled)` if a stop has been asked for, so callers can use `?`.
+    pub fn check(&self) -> Result<()> {
+        if self.is_cancelled() {
+            bail!(Cancelled);
+        }
+        Ok(())
+    }
+}
+
+/// Whether an error is a deliberate stop rather than a failure.
+pub fn was_cancelled(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| cause.is::<Cancelled>())
+}
+
+/// Runs a child process, killing it if a stop is asked for while it works.
+///
+/// The pipes are drained on their own threads. Polling `try_wait` while a
+/// child writes to a pipe nobody is reading deadlocks as soon as that pipe
+/// fills, and `git` is perfectly capable of filling one.
+fn wait_or_kill(mut command: Command, cancel: &Cancel) -> Result<std::process::Output> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawning git")?;
+
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let out_thread = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        if let Some(pipe) = stdout.as_mut() {
+            use std::io::Read;
+            let _ = pipe.read_to_end(&mut buffer);
+        }
+        buffer
+    });
+    let err_thread = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        if let Some(pipe) = stderr.as_mut() {
+            use std::io::Read;
+            let _ = pipe.read_to_end(&mut buffer);
+        }
+        buffer
+    });
+
+    let status = loop {
+        if cancel.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = out_thread.join();
+            let _ = err_thread.join();
+            bail!(Cancelled);
+        }
+        match child.try_wait().context("waiting for git")? {
+            Some(status) => break status,
+            None => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    };
+
+    Ok(std::process::Output {
+        status,
+        stdout: out_thread.join().unwrap_or_default(),
+        stderr: err_thread.join().unwrap_or_default(),
+    })
+}
 
 /// How to answer git's password prompt, without the secret ever reaching a
 /// command line.
@@ -53,6 +157,7 @@ pub struct Git {
     root: PathBuf,
     credential: Option<Arc<Credential>>,
     identity: Identity,
+    cancel: Cancel,
 }
 
 /// Who the merge and boundary commits are attributed to.
@@ -73,6 +178,7 @@ impl Default for Identity {
 
 /// What a git invocation produced. `status` is kept so callers can tell a
 /// meaningful non-zero exit (a conflict, a missing object) from a real failure.
+#[derive(Debug)]
 pub struct Output {
     pub status: i32,
     pub stdout: String,
@@ -114,7 +220,13 @@ impl Git {
             root: root.into(),
             credential: None,
             identity: Identity::default(),
+            cancel: Cancel::new(),
         }
+    }
+
+    pub fn with_cancel(mut self, cancel: Cancel) -> Self {
+        self.cancel = cancel;
+        self
     }
 
     pub fn with_credential(mut self, credential: Option<Arc<Credential>>) -> Self {
@@ -141,28 +253,32 @@ impl Git {
         branch: &str,
         dest: &Path,
         credential: Option<Arc<Credential>>,
+        cancel: Cancel,
     ) -> Result<Self> {
         let identity = Identity::default();
-        let out = command(None, credential.as_deref(), &identity)
+        let mut command = command(None, credential.as_deref(), &identity);
+        command
             .args(["clone", "--quiet", "--filter=blob:none", "--branch", branch])
             .arg(url)
-            .arg(dest)
-            .output()
-            .context("running `git clone`")?;
+            .arg(dest);
+        // The slowest step by far, and the one a stop most needs to interrupt.
+        let out = wait_or_kill(command, &cancel)?;
         if !out.status.success() {
             bail!(
                 "cloning {url} at {branch} failed: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
-        Ok(Self::new(dest).with_credential(credential))
+        Ok(Self::new(dest)
+            .with_credential(credential)
+            .with_cancel(cancel))
     }
 
     /// Runs git and returns its output whatever the exit status.
     pub fn try_run(&self, args: &[&str]) -> Result<Output> {
-        let out = command(Some(&self.root), self.credential.as_deref(), &self.identity)
-            .args(args)
-            .output()
+        let mut command = command(Some(&self.root), self.credential.as_deref(), &self.identity);
+        command.args(args);
+        let out = wait_or_kill(command, &self.cancel)
             .with_context(|| format!("running `git {}`", args.join(" ")))?;
         Ok(Output {
             status: out.status.code().unwrap_or(-1),
@@ -322,5 +438,65 @@ impl Git {
             &format!("HEAD:refs/heads/{branch}"),
         ])?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo() -> (tempfile::TempDir, Git) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let git = Git::new(dir.path());
+        git.run(&["init", "--quiet", "--initial-branch=main"])
+            .unwrap();
+        (dir, git)
+    }
+
+    #[test]
+    fn a_command_runs_normally_when_nothing_has_asked_it_to_stop() {
+        let (_dir, git) = repo();
+        assert!(git.try_run(&["status", "--porcelain"]).unwrap().ok());
+    }
+
+    /// The flag is checked before and during the child, so a stop asked for in
+    /// advance takes effect rather than waiting for the next command.
+    #[test]
+    fn a_cancelled_flag_stops_a_command_and_says_that_is_why() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cancel = Cancel::new();
+        cancel.cancel();
+        let git = Git::new(dir.path()).with_cancel(cancel);
+
+        let error = git
+            .try_run(&["status"])
+            .expect_err("a cancelled command does not succeed");
+        assert!(
+            was_cancelled(&error),
+            "and is reported as a stop, not a failure: {error:#}"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_failure_is_not_mistaken_for_a_stop() {
+        let (_dir, git) = repo();
+        let error = git
+            .run(&[
+                "cat-file",
+                "-e",
+                "0000000000000000000000000000000000000000^{commit}",
+            ])
+            .expect_err("no such object");
+        assert!(!was_cancelled(&error), "{error:#}");
+    }
+
+    #[test]
+    fn cancelling_is_visible_to_whoever_holds_a_clone_of_the_flag() {
+        let cancel = Cancel::new();
+        let elsewhere = cancel.clone();
+        assert!(!elsewhere.is_cancelled());
+        cancel.cancel();
+        assert!(elsewhere.is_cancelled(), "the flag is shared, not copied");
+        assert!(elsewhere.check().is_err());
     }
 }

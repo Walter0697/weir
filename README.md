@@ -259,6 +259,16 @@ From there: edit a fork, set a cron schedule, press **Dry run** to see what a
 sync would do, or **Sync all** to do it. Every run is kept with its full output,
 so you can read last Friday's without having been watching.
 
+**Stop** appears while something is running. Cancellation is cooperative,
+because it has to be — the work is child `git` processes and blocking HTTP, and
+none of that can be interrupted from outside. What it does is kill the `git`
+process running right now and stop before the next repository, which in practice
+means a stop lands within a second or two even during a long clone.
+
+Stopping is always safe. Every run rebuilds its branch from scratch, so a sync
+that was interrupted after pushing leaves a branch the next run simply replaces,
+and one interrupted before pushing leaves nothing at all.
+
 **Loopback by default, on purpose.** Anything that can reach this can change
 which repositories get force-pushed.
 

@@ -6,7 +6,7 @@
 //! the same thing.
 
 use crate::forge::{self, Forge};
-use crate::git::{Credential, Git};
+use crate::git::{Cancel, Credential, Git};
 use crate::sync::{self, Merge, Plan, Sync};
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -41,6 +41,16 @@ pub struct Options {
     pub sync_branch: String,
     pub boundary_file: String,
     pub dry_run: bool,
+}
+
+impl Options {
+    pub fn one_shot(sync_branch: String, boundary_file: String, dry_run: bool) -> Self {
+        Self {
+            sync_branch,
+            boundary_file,
+            dry_run,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +88,12 @@ impl Report {
 
 /// Clones the fork, builds the sync branch, pushes it, and reconciles the pull
 /// request. Everything it would have said comes back in [`Report::lines`].
-pub fn sync_fork(forge_spec: &ForgeSpec, fork: &ForkSpec, options: &Options) -> Result<Report> {
+pub fn sync_fork(
+    forge_spec: &ForgeSpec,
+    fork: &ForkSpec,
+    options: &Options,
+    cancel: &Cancel,
+) -> Result<Report> {
     let mut lines = Vec::new();
     let mut say = |line: String| lines.push(line);
 
@@ -100,7 +115,7 @@ pub fn sync_fork(forge_spec: &ForgeSpec, fork: &ForkSpec, options: &Options) -> 
     let checkout = workspace.path().join(&fork.repo);
 
     let url = clone_url(forge_spec, &fork.repo);
-    let git = Git::clone_repo(&url, &fork.branch, &checkout, credential)?;
+    let git = Git::clone_repo(&url, &fork.branch, &checkout, credential, cancel.clone())?;
 
     let plan = Plan {
         base_branch: fork.branch.clone(),
@@ -113,6 +128,11 @@ pub fn sync_fork(forge_spec: &ForgeSpec, fork: &ForkSpec, options: &Options) -> 
     let outcome = sync::build(&git, &plan, &fork.upstream)?;
     let mut pr_url = None;
     let head = &options.sync_branch;
+
+    // The last point at which stopping costs nothing at all. Past here the
+    // branch is pushed, which is harmless in itself — every run rebuilds it
+    // from scratch — but it is worth taking the free exit while it is free.
+    cancel.check()?;
 
     let result = match &outcome {
         Sync::UpToDate { delta } => {

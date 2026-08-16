@@ -181,7 +181,10 @@ fn run(config_path: &Path, only: Option<&str>, dry_run: bool) -> Result<()> {
             upstream_branch: fork.upstream_branch.clone(),
             keep_removed: fork.keep_removed.clone(),
         };
-        match runner::sync_fork(&forge, &spec, &options) {
+        // The one-shot path has no stop switch of its own: Ctrl-C already ends
+        // the process, and every run rebuilds its branch from scratch, so there
+        // is nothing a graceful stop would tidy up.
+        match runner::sync_fork(&forge, &spec, &options, &weir::git::Cancel::new()) {
             Ok(report) => {
                 for line in &report.lines {
                     println!("{}: {line}", fork.repo);

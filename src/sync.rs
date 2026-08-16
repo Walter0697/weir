@@ -223,6 +223,7 @@ fn record_boundary(git: &Git, boundary_file: &str, upstream_sha: &str) -> Result
 mod tests {
     use super::*;
     use crate::boundary::Basis;
+    use crate::git::Cancel;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 
@@ -279,7 +280,14 @@ mod tests {
                 ])
                 .unwrap();
 
-            let seeded = Git::clone_repo(upstream.to_str().unwrap(), "main", &seed, None).unwrap();
+            let seeded = Git::clone_repo(
+                upstream.to_str().unwrap(),
+                "main",
+                &seed,
+                None,
+                Cancel::new(),
+            )
+            .unwrap();
             seeded.run(&["rm", "--quiet", "--", DROPPED]).unwrap();
             seeded
                 .run(&[
@@ -293,7 +301,8 @@ mod tests {
             seeded.add_remote("fork", fork.to_str().unwrap()).unwrap();
             seeded.run(&["push", "--quiet", "fork", "main"]).unwrap();
 
-            let work = Git::clone_repo(fork.to_str().unwrap(), "main", &work, None).unwrap();
+            let work = Git::clone_repo(fork.to_str().unwrap(), "main", &work, None, Cancel::new())
+                .unwrap();
 
             Self {
                 _dir: dir,

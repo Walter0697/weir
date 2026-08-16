@@ -13,6 +13,7 @@ mod auth;
 mod pages;
 
 use crate::forge::Forge;
+use crate::git::Cancel;
 use crate::notify::{self, Notifier};
 use crate::runner::{self, ForgeSpec, ForkSpec, Options};
 use crate::store::{Fork, NewConnection, NewFork, Settings, Store};
@@ -28,11 +29,16 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct App {
     store: Arc<Store>,
+    /// The stop switch for whatever batch is running. Runs are serial, so one
+    /// flag is enough; it is replaced at the start of each batch rather than
+    /// reset, so a stale cancel cannot carry into the next one.
+    cancel: Arc<std::sync::Mutex<Cancel>>,
 }
 
 pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
     let app = App {
         store: Arc::new(store),
+        cancel: Arc::new(std::sync::Mutex::new(Cancel::new())),
     };
 
     let scheduler = app.clone();
@@ -54,6 +60,7 @@ pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
         .route("/forks/{id}", get(pages::edit_fork).post(update_fork))
         .route("/forks/{id}/delete", post(delete_fork))
         .route("/run", post(trigger_run))
+        .route("/cancel", post(cancel_run))
         .route("/runs/{id}", get(pages::run_detail))
         .with_state(app)
         .route("/login", get(auth::login_page).post(auth::login))
@@ -131,7 +138,7 @@ impl App {
 
     /// Runs one fork and records it. Blocking on purpose — the git and HTTP
     /// work underneath is blocking, so it must never run on the async runtime.
-    fn sync_one_blocking(&self, fork: crate::store::Fork, dry_run: bool) {
+    fn sync_one_blocking(&self, fork: crate::store::Fork, dry_run: bool, cancel: &Cancel) {
         let run_id = match self.store.start_run(&fork.repo, dry_run) {
             Ok(id) => id,
             Err(error) => {
@@ -151,7 +158,7 @@ impl App {
         let result = self
             .forge_spec(&fork)
             .and_then(|forge| Ok((forge, self.options(dry_run)?)))
-            .and_then(|(forge, options)| runner::sync_fork(&forge, &spec, &options));
+            .and_then(|(forge, options)| runner::sync_fork(&forge, &spec, &options, cancel));
 
         let notifiers = self.notifiers();
         match result {
@@ -166,6 +173,13 @@ impl App {
                     &notifiers,
                     &notify::summarise(&fork.repo, &report.sync, report.pr_url.as_deref(), dry_run),
                 );
+            }
+            Err(error) if crate::git::was_cancelled(&error) => {
+                // Not a failure, and not worth a notification: somebody pressed
+                // the button and is looking at the page.
+                let _ = self
+                    .store
+                    .finish_run(run_id, "cancelled", "Stopped on request.", None);
             }
             Err(error) => {
                 let detail = format!("{error:#}");
@@ -474,16 +488,41 @@ async fn trigger_run(
         .filter(|f| request.repo.as_deref().is_none_or(|r| r == f.repo))
         .collect();
 
+    // A fresh flag per batch, so pressing stop on one run cannot silently kill
+    // the next one somebody starts.
+    let cancel = Cancel::new();
+    *app.cancel
+        .lock()
+        .expect("the cancel lock is never poisoned") = cancel.clone();
+
     // Handed to a blocking thread and not waited on: a sync takes minutes, and
     // a browser request that hangs that long is one the user will reload,
     // starting a second sync on top of the first.
     let worker = app.clone();
     tokio::task::spawn_blocking(move || {
         for fork in selected {
-            worker.sync_one_blocking(fork, dry_run);
+            // Between repositories as well as inside them, so stopping a batch
+            // of five does not sync the remaining four first.
+            if cancel.is_cancelled() {
+                break;
+            }
+            worker.sync_one_blocking(fork, dry_run, &cancel);
         }
     });
 
+    Redirect::to("/").into_response()
+}
+
+/// Asks whatever is running to stop.
+///
+/// Cooperative: it kills the git child process that is running now and stops
+/// before the next repository. Anything already pushed stays pushed, which
+/// costs nothing — the branch is rebuilt from scratch on the next run.
+async fn cancel_run(State(app): State<App>) -> impl IntoResponse {
+    app.cancel
+        .lock()
+        .expect("the cancel lock is never poisoned")
+        .cancel();
     Redirect::to("/").into_response()
 }
 
@@ -565,10 +604,17 @@ async fn schedule_loop(app: App) {
         let Ok(forks) = app.store.forks() else {
             continue;
         };
+        let cancel = Cancel::new();
+        *app.cancel
+            .lock()
+            .expect("the cancel lock is never poisoned") = cancel.clone();
         let worker = app.clone();
         tokio::task::spawn_blocking(move || {
             for fork in forks.into_iter().filter(|f| f.enabled) {
-                worker.sync_one_blocking(fork, false);
+                if cancel.is_cancelled() {
+                    break;
+                }
+                worker.sync_one_blocking(fork, false, &cancel);
             }
         });
     }

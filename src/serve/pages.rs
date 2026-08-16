@@ -162,6 +162,8 @@ fn outcome_class(outcome: Option<&str>) -> &'static str {
         Some("clean") | Some("up to date") => "ok",
         Some("conflicts") => "warn",
         Some("failed") => "bad",
+        // Cancelled is neither good nor bad: somebody meant it.
+        Some("cancelled") => "muted",
         _ => "muted",
     }
 }
@@ -192,13 +194,19 @@ pub async fn dashboard(State(app): State<App>) -> impl IntoResponse {
                 div class="row" style="justify-content:space-between; margin-bottom:.5rem" {
                     h2 style="margin:0" { "Forks" }
                     div class="row" {
+                        @let running = runs.iter().any(|r| r.finished_at.is_none());
+                        @if running {
+                            form method="post" action="/cancel" style="display:inline" {
+                                button class="danger" type="submit" { "Stop" }
+                            }
+                        }
                         a class="btn" href="/forks/new" { "Add fork" }
                         form method="post" action="/run" style="display:inline" {
                             input type="hidden" name="dry_run" value="1";
                             button type="submit" { "Dry run all" }
                         }
                         form method="post" action="/run" style="display:inline" {
-                            button class="primary" type="submit" { "Sync all" }
+                            button class="primary" type="submit" disabled[running] { "Sync all" }
                         }
                     }
                 }
