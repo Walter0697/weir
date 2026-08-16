@@ -130,6 +130,29 @@ details[open] > summary::before { transform:rotate(90deg); }
 details > summary:hover { color:var(--accent); }
 .details-body { padding:0 1.1rem 1rem; }
 
+/* Row menus. `details` again, so there is no JavaScript and no click-outside
+   handler — the trade is that a menu stays open until you click its own button
+   again, which is a small cost for keeping the page inert. */
+.menu-wrap { position:relative; display:inline-block; }
+.menu-wrap > summary { list-style:none; cursor:pointer; padding:.3rem .55rem; border-radius:7px;
+  border:1px solid var(--line); background:var(--card); line-height:1; user-select:none;
+  display:inline-flex; align-items:center; }
+.menu-wrap > summary::-webkit-details-marker { display:none; }
+.menu-wrap > summary::before { content:none; }
+.menu-wrap > summary:hover { border-color:var(--accent); color:var(--accent); }
+.menu { position:absolute; right:0; top:calc(100% + .35rem); z-index:20; min-width:13rem;
+  background:var(--card); border:1px solid var(--line); border-radius:10px; padding:.3rem;
+  box-shadow:0 8px 24px rgba(0,0,0,.18); text-align:left; }
+.menu form { display:block; margin:0; }
+.menu a, .menu button { display:flex; align-items:center; width:100%; text-align:left;
+  background:none; border:none; border-radius:6px; padding:.42rem .55rem; font:inherit;
+  font-size:.86rem; color:var(--fg); cursor:pointer; text-decoration:none; }
+.menu a:hover, .menu button:hover { background:color-mix(in srgb, var(--accent) 12%, transparent); }
+.menu button.danger:hover { background:color-mix(in srgb, var(--bad) 14%, transparent); }
+.menu hr { border:none; border-top:1px solid var(--line); margin:.3rem .2rem; }
+/* The menu escapes its row, so nothing between it and the page may clip. */
+.card, table, tbody, tr, td { overflow:visible; }
+
 /* A run still going, so the page says something is happening without polling. */
 .dot { display:inline-block; width:.5rem; height:.5rem; border-radius:50%;
   background:currentColor; margin-right:.4rem; vertical-align:middle; }
@@ -381,18 +404,54 @@ fn watched_row(watch_id: i64, owner: &str, target: &super::Planned) -> Markup {
             td class="mono small" { (target.branch) }
             td class="small muted" { "watch on " (owner) }
             td {
-                form method="post" action={ "/watches/" (watch_id) "/except" } style="display:inline" {
-                    input type="hidden" name="repo" value=(target.repo);
-                    button type="submit" { "Stop syncing" }
-                }
-                form method="post" action="/forks/promote" style="display:inline" {
-                    input type="hidden" name="connection_id" value=(target.connection_id);
-                    input type="hidden" name="owner" value=(target.owner);
-                    input type="hidden" name="repo" value=(target.repo);
-                    input type="hidden" name="upstream" value=(target.upstream);
-                    input type="hidden" name="branch" value=(target.branch);
-                    button type="submit" { "Configure" }
-                }
+                (row_menu(html! {
+                    (menu_run(&target.repo, true))
+                    (menu_run(&target.repo, false))
+                    hr;
+                    a href={ "/repo/" (target.owner) "/" (target.repo) } {
+                        (icon("external")) "Details"
+                    }
+                    form method="post" action="/forks/promote" {
+                        input type="hidden" name="connection_id" value=(target.connection_id);
+                        input type="hidden" name="owner" value=(target.owner);
+                        input type="hidden" name="repo" value=(target.repo);
+                        input type="hidden" name="upstream" value=(target.upstream);
+                        input type="hidden" name="branch" value=(target.branch);
+                        button type="submit" { "Configure it separately" }
+                    }
+                    hr;
+                    form method="post" action={ "/watches/" (watch_id) "/except" } {
+                        button class="danger" type="submit" { "Stop syncing this" }
+                    }
+                }))
+            }
+        }
+    }
+}
+
+/// The `⋯` menu for a row.
+///
+/// Everything a row can do lives in here rather than beside it: four verbs in a
+/// row is a wall of buttons, and the destructive one ends up a pixel from the
+/// harmless one. Order runs from most-used to most-final, with the two that
+/// change a repository at the bottom behind a rule.
+fn row_menu(items: Markup) -> Markup {
+    html! {
+        details class="menu-wrap" {
+            summary title="Actions" { "⋯" }
+            div class="menu" { (items) }
+        }
+    }
+}
+
+fn menu_run(repo: &str, dry: bool) -> Markup {
+    html! {
+        form method="post" action="/run" {
+            input type="hidden" name="repo" value=(repo);
+            @if dry { input type="hidden" name="dry_run" value="1"; }
+            button type="submit" {
+                (icon("play"))
+                @if dry { "Dry run" } @else { "Sync now" }
             }
         }
     }
@@ -419,14 +478,16 @@ fn fork_row(fork: &Fork) -> Markup {
                 }
             }
             td {
-                form method="post" action="/run" style="display:inline" {
-                    input type="hidden" name="repo" value=(fork.repo);
-                    input type="hidden" name="dry_run" value="1";
-                    button type="submit" { "Dry run" }
-                }
-                form method="post" action={ "/forks/" (fork.id) "/delete" } style="display:inline" {
-                    button class="danger" type="submit" { "Remove" }
-                }
+                (row_menu(html! {
+                    (menu_run(&fork.repo, true))
+                    (menu_run(&fork.repo, false))
+                    hr;
+                    a href={ "/forks/" (fork.id) } { (icon("external")) "Settings" }
+                    hr;
+                    form method="post" action={ "/forks/" (fork.id) "/delete" } {
+                        button class="danger" type="submit" { "Remove this fork" }
+                    }
+                }))
             }
         }
     }
