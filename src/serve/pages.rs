@@ -182,6 +182,33 @@ pub async fn dashboard(State(app): State<App>) -> impl IntoResponse {
     let runs = app.store().recent_runs(15).unwrap_or_default();
     let settings = app.store().settings().unwrap_or_default();
     let connections = app.store().connections().unwrap_or_default();
+    let watches = app.store().watches().unwrap_or_default();
+
+    // Everything a run would touch belongs on one page, or "what will sync?"
+    // has two answers in two places. Watched repositories are worked out live,
+    // off the async runtime, and a watch that cannot be listed is reported
+    // rather than silently leaving its repositories out of the list.
+    let (watched, watch_errors) = {
+        let app = app.clone();
+        let enabled: Vec<_> = watches.iter().filter(|w| w.enabled).cloned().collect();
+        tokio::task::spawn_blocking(move || {
+            let mut covered = Vec::new();
+            let mut errors = Vec::new();
+            for watch in enabled {
+                match super::expand(&app, &watch) {
+                    Ok(expansion) => {
+                        for target in expansion.covered {
+                            covered.push((watch.id, watch.owner.clone(), target));
+                        }
+                    }
+                    Err(error) => errors.push(format!("{}: {error:#}", watch.owner)),
+                }
+            }
+            (covered, errors)
+        })
+        .await
+        .unwrap_or_default()
+    };
 
     Html(
         shell(
@@ -199,9 +226,12 @@ pub async fn dashboard(State(app): State<App>) -> impl IntoResponse {
                         " has no token. Pushing, listing, and opening pull requests all need one."
                     }
                 }
+                @for error in &watch_errors {
+                    div class="note small" { "A watch could not be listed — " (error) }
+                }
 
                 div class="row" style="justify-content:space-between; margin-bottom:.5rem" {
-                    h2 style="margin:0" { "Forks" }
+                    h2 style="margin:0" { "Syncing" }
                     div class="row" {
                         @let running = runs.iter().any(|r| r.finished_at.is_none());
                         @if running {
@@ -220,15 +250,20 @@ pub async fn dashboard(State(app): State<App>) -> impl IntoResponse {
                     }
                 }
 
-                @if forks.is_empty() {
-                    div class="card muted" { "No forks configured yet." }
+                @if forks.is_empty() && watched.is_empty() {
+                    div class="card muted" { "Nothing is configured to sync yet." }
                 } @else {
                     div class="card" { table {
                         thead { tr {
                             th { "Repository" } th { "Upstream" } th { "Branch" }
-                            th { "Kept removed" } th {}
+                            th { "Source" } th {}
                         }}
-                        tbody { @for fork in &forks { (fork_row(fork)) } }
+                        tbody {
+                            @for fork in &forks { (fork_row(fork)) }
+                            @for (watch_id, owner, target) in &watched {
+                                (watched_row(*watch_id, owner, target))
+                            }
+                        }
                     }}
                 }
 
@@ -263,6 +298,31 @@ pub async fn dashboard(State(app): State<App>) -> impl IntoResponse {
     )
 }
 
+/// A repository a watch covers. It has no row of its own to edit, so the
+/// actions are the two that make sense: stop covering it, or promote it to a
+/// fork of its own when it needs settings a watch cannot carry.
+fn watched_row(watch_id: i64, owner: &str, target: &super::Planned) -> Markup {
+    html! {
+        tr {
+            td { (target.owner) "/" (target.repo) }
+            td class="mono small muted" { (target.upstream) }
+            td class="mono small" { (target.branch) }
+            td class="small muted" { "watch on " (owner) }
+            td {
+                form method="post" action={ "/watches/" (watch_id) "/except" } style="display:inline" {
+                    input type="hidden" name="repo" value=(target.repo);
+                    button type="submit" { "Stop syncing" }
+                }
+                form method="get" action="/forks/new" style="display:inline" {
+                    input type="hidden" name="connection" value=(target.connection_id);
+                    input type="hidden" name="owner" value=(target.owner);
+                    button type="submit" { "Configure" }
+                }
+            }
+        }
+    }
+}
+
 fn fork_row(fork: &Fork) -> Markup {
     html! {
         tr {
@@ -278,13 +338,19 @@ fn fork_row(fork: &Fork) -> Markup {
                 }
             }
             td class="small muted" {
-                @if fork.keep_removed.is_empty() { "—" } @else { (fork.keep_removed.len()) " path(s)" }
+                "configured"
+                @if !fork.keep_removed.is_empty() {
+                    span class="muted" { " · " (fork.keep_removed.len()) " kept removed" }
+                }
             }
             td {
                 form method="post" action="/run" style="display:inline" {
                     input type="hidden" name="repo" value=(fork.repo);
                     input type="hidden" name="dry_run" value="1";
                     button type="submit" { "Dry run" }
+                }
+                form method="post" action={ "/forks/" (fork.id) "/delete" } style="display:inline" {
+                    button class="danger" type="submit" { "Remove" }
                 }
             }
         }
@@ -844,7 +910,7 @@ pub async fn watches(State(app): State<App>) -> impl IntoResponse {
                                         p class="small muted" { "Nothing visible under that owner." }
                                     }
                                     @if !expansion.covered.is_empty() {
-                                        p class="small" { "Syncs now:" }
+                                        p class="small" { "This watch syncs these:" }
                                         table { tbody { @for target in &expansion.covered {
                                             tr {
                                                 td { (target.repo) }
@@ -853,14 +919,14 @@ pub async fn watches(State(app): State<App>) -> impl IntoResponse {
                                                 td {
                                                     form method="post" action={ "/watches/" (watch.id) "/except" } {
                                                         input type="hidden" name="repo" value=(target.repo);
-                                                        button type="submit" { "Leave alone" }
+                                                        button type="submit" { "Stop syncing" }
                                                     }
                                                 }
                                             }
                                         }}}
                                     }
                                     @if !expansion.skipped.is_empty() {
-                                        p class="small muted" { "Leaves alone:" }
+                                        p class="small muted" { "It does not sync these:" }
                                         table { tbody { @for (name, why) in &expansion.skipped {
                                             tr {
                                                 td class="muted" { (name) }
@@ -876,19 +942,22 @@ pub async fn watches(State(app): State<App>) -> impl IntoResponse {
                                                             form method="post"
                                                                  action={ "/watches/" (watch.id) "/include" } {
                                                                 input type="hidden" name="repo" value=(name);
-                                                                button type="submit" { "Include" }
+                                                                button type="submit" { "Start syncing" }
                                                             }
                                                         }
                                                         Skipped::Excepted(pattern) => {
                                                             span class="small muted" {
-                                                                "edit " code { (pattern) } " below"
+                                                                "covered by " code { (pattern) }
+                                                                ", remove that below to sync it"
                                                             }
                                                         }
                                                         Skipped::ConfiguredSeparately => {
-                                                            a class="small" href="/" { "see Forks" }
+                                                            a class="small" href="/" { "already syncing on its own" }
                                                         }
                                                         Skipped::NoUpstream => {
-                                                            a class="small" href="/forks/new" { "add it by hand" }
+                                                            span class="small muted" {
+                                                                "the forge does not record an upstream for it"
+                                                            }
                                                         }
                                                     }
                                                 }

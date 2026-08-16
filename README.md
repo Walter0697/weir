@@ -279,14 +279,17 @@ anyone editing anything.
 Three things narrow it, and the page shows all three rather than applying them
 quietly — a rule whose effect you cannot see is a rule you cannot trust:
 
-```
-walter-opensource — covers 1 repo(s), skips 3
+The Forks page lists everything that will sync, however it got there — rows you
+wrote down and rows a watch covers, with the source of each:
 
-  syncs now:     dokploy (canary)
-  leaves alone:  codex          — configured as its own fork
-                 renovate-bot   — no upstream recorded on the forge
-                 renovate-config — no upstream recorded on the forge
 ```
+walter-opensource/codex     configured                 [Dry run] [Remove]
+walter-opensource/dokploy   watch on walter-opensource [Stop syncing] [Configure]
+```
+
+**Configure** promotes a watched repository to a fork of its own, which is how
+it gains settings a watch cannot carry — `keep_removed`, or a different upstream
+branch.
 
 - **Exceptions** you write. Names, or `*` patterns like `test-*`. A bare `*`
   excepts everything, which pauses a watch without losing what you wrote.
