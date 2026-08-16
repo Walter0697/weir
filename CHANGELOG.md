@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1](https://github.com/Walter0697/weir/compare/v0.3.0...v0.3.1) (2026-08-16)
+
+
+### Fixes
+
+* stop reporting a merge that never started as a conflict ([19241c9](https://github.com/Walter0697/weir/commit/19241c9315890066164ab855ce814185c54cc797))
+
+
+### Documentation
+
+* say what this is in the words people search for ([be8429c](https://github.com/Walter0697/weir/commit/be8429c40ac418d3b6bb43afe03dc604bae66eb2))
+
 ## [0.3.0](https://github.com/Walter0697/weir/compare/v0.2.0...v0.3.0) (2026-08-16)
 
 
