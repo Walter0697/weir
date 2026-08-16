@@ -30,7 +30,14 @@ h1 { font-size:1.05rem; margin:0 1rem 0 0; letter-spacing:.02em; }
 h2 { font-size:.95rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:2rem 0 .75rem; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:1rem 1.1rem; margin-bottom:1rem; }
 table { width:100%; border-collapse:collapse; }
-th,td { text-align:left; padding:.55rem .6rem; border-bottom:1px solid var(--line); vertical-align:top; }
+th,td { text-align:left; padding:.55rem .6rem; border-bottom:1px solid var(--line); }
+/* Middle, not top: every row here is one line of text beside a button, and
+   top-aligning the text leaves it sitting above the button's centre. */
+td { vertical-align:middle; }
+th { vertical-align:bottom; }
+/* The action column: hard right, and never wrapped onto two lines. */
+td:last-child { text-align:right; white-space:nowrap; }
+td:last-child form { display:inline-block; margin:0; }
 th { font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:600; }
 tr:last-child td { border-bottom:none; }
 label { display:block; margin:.85rem 0 .3rem; font-size:.85rem; color:var(--muted); }
