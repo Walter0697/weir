@@ -41,7 +41,7 @@ pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
         .route("/", get(pages::dashboard))
         .route("/settings", get(pages::settings).post(save_settings))
         .route("/settings/forge-token", post(save_forge_token))
-        .route("/settings/telegram-token", post(save_telegram_token))
+        .route("/settings/telegram", post(save_telegram))
         .route("/forks/new", get(pages::new_fork))
         .route("/forks", post(create_fork))
         .route("/forks/{id}", get(pages::edit_fork).post(update_fork))
@@ -165,7 +165,6 @@ pub struct SettingsForm {
     sync_branch: String,
     boundary_file: String,
     schedule: String,
-    telegram_chat: String,
 }
 
 async fn save_settings(
@@ -189,7 +188,9 @@ async fn save_settings(
         sync_branch: form.sync_branch.trim().to_string(),
         boundary_file: form.boundary_file.trim().to_string(),
         schedule,
-        telegram_chat: blank_to_none(&form.telegram_chat),
+        // Carried through untouched: notifications are edited by their own
+        // form, so saving the forge settings must not blank the chat id.
+        telegram_chat: app.store.settings().ok().and_then(|s| s.telegram_chat),
     };
     match app.store.save_settings(&settings) {
         Ok(()) => Redirect::to("/settings").into_response(),
@@ -212,14 +213,35 @@ async fn save_forge_token(
     }
 }
 
-async fn save_telegram_token(
+#[derive(Deserialize)]
+pub struct TelegramForm {
+    token: String,
+    chat: String,
+}
+
+/// Both halves at once, because either alone does nothing: a bot with no chat
+/// has nowhere to send, and a chat with no bot has nothing to send with.
+async fn save_telegram(
     State(app): State<App>,
-    axum::Form(form): axum::Form<TokenForm>,
+    axum::Form(form): axum::Form<TelegramForm>,
 ) -> impl IntoResponse {
-    match app.store.set_telegram_token(form.token.trim()) {
-        Ok(()) => Redirect::to("/settings").into_response(),
-        Err(error) => pages::error_page("Could not store the token", &format!("{error:#}")),
+    let mut settings = match app.store.settings() {
+        Ok(settings) => settings,
+        Err(error) => return pages::error_page("Could not read settings", &format!("{error:#}")),
+    };
+    settings.telegram_chat = blank_to_none(&form.chat);
+    if let Err(error) = app.store.save_settings(&settings) {
+        return pages::error_page("Could not save the chat id", &format!("{error:#}"));
     }
+    // A blank token leaves the stored one alone, so the chat id can be edited
+    // without pasting the token again — it is never shown, so it cannot be
+    // round-tripped through the form.
+    if !form.token.trim().is_empty() {
+        if let Err(error) = app.store.set_telegram_token(form.token.trim()) {
+            return pages::error_page("Could not store the token", &format!("{error:#}"));
+        }
+    }
+    Redirect::to("/settings").into_response()
 }
 
 #[derive(Deserialize)]

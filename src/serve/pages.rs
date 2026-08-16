@@ -354,11 +354,6 @@ pub async fn settings(State(app): State<App>) -> impl IntoResponse {
                                       value=(settings.schedule.clone().unwrap_or_default())
                                       placeholder="0 5 * * 5";
                             }
-                            div {
-                                label for="telegram_chat" { "Telegram chat id " span class="muted" { "(optional)" } }
-                                input type="text" id="telegram_chat" name="telegram_chat"
-                                      value=(settings.telegram_chat.clone().unwrap_or_default());
-                            }
                         }
                         button class="primary" type="submit" { "Save" }
                     }
@@ -412,21 +407,54 @@ pub async fn settings(State(app): State<App>) -> impl IntoResponse {
                             " is enough — it never needs admin, and it is never asked to merge anything."
                         }
                     }
-                    form method="post" action="/settings/telegram-token" style="margin-top:1rem" {
-                        label for="telegram_token" {
-                            "Telegram bot token "
-                            @match secrets.map(|s| s.telegram_token) {
-                                Some(true) => span class="ok" { "— set" },
-                                _ => span class="muted" { "— not set (notifications off)" },
-                            }
-                        }
-                        div class="row" {
-                            input type="password" id="telegram_token" name="token" style="flex:1";
-                            button type="submit" { "Replace" }
-                        }
-                    }
                     p class="small muted" {
                         "Nothing is needed for GitHub — public upstreams are cloned anonymously."
+                    }
+                }
+
+                h2 { "Notifications" }
+                form method="post" action="/settings/telegram" {
+                    div class="card" {
+                        @let has_token = secrets.is_some_and(|s| s.telegram_token);
+                        @let has_chat = settings.telegram_chat.as_deref().is_some_and(|c| !c.is_empty());
+                        p class="small" {
+                            @if has_token && has_chat {
+                                span class="ok" { "On" }
+                                span class="muted" { " — one message per fork per run, including failures." }
+                            } @else if !has_token && !has_chat {
+                                span class="muted" {
+                                    "Off. A sync on a schedule is invisible unless it says something, so                                      this is worth setting even if you only read it once a week."
+                                }
+                            } @else {
+                                span class="warn" { "Incomplete — nothing will be sent." }
+                                span class="muted" {
+                                    @if has_token { " A bot with no chat id has nowhere to send." }
+                                    @else { " A chat id with no bot token has nothing to send with." }
+                                }
+                            }
+                        }
+                        div class="grid2" {
+                            div {
+                                label for="telegram_token" {
+                                    "Telegram bot token "
+                                    @if has_token { span class="ok" { "— set" } }
+                                    @else { span class="muted" { "— not set" } }
+                                }
+                                input type="password" id="telegram_token" name="token"
+                                      placeholder=(if has_token { "leave blank to keep the stored one" }
+                                                   else { "from @BotFather" });
+                            }
+                            div {
+                                label for="telegram_chat" { "Chat id" }
+                                input type="text" id="telegram_chat" name="chat"
+                                      value=(settings.telegram_chat.clone().unwrap_or_default())
+                                      placeholder="-1001234567890";
+                            }
+                        }
+                        p class="small muted" {
+                            "Both are needed, or neither does anything. Clear the chat id to turn                              notifications off without discarding the token."
+                        }
+                        div style="margin-top:1rem" { button class="primary" type="submit" { "Save" } }
                     }
                 }
             },
