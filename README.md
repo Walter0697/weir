@@ -7,6 +7,12 @@
   </p>
 </div>
 
+Automatically keeps forks on **Gitea** or **Forgejo** up to date with their
+upstream repositories on GitHub — on a schedule, opening a pull request for each
+sync rather than merging into your branch. For forks you have actually modified,
+where a pull mirror would overwrite your changes and the forge's own "sync fork"
+button does not exist.
+
 > **Status: usable, early.** It clones, merges, builds and pushes the branch, and
 > opens, refreshes, or retires the pull request. Run it once from a cron or CI
 > job, or run `weir serve` for a web UI with its own schedule. Use `--dry-run`
