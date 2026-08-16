@@ -186,6 +186,14 @@ impl Forge for Gitea {
                 Some(Discovered {
                     name,
                     default_branch,
+                    archived: repo
+                        .get("archived")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                    mirror: repo
+                        .get("mirror")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
                     upstream,
                 })
             })

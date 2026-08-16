@@ -336,6 +336,19 @@ pub fn expand(app: &App, watch: &Watch) -> Result<Expansion> {
     let mut covered = Vec::new();
     let mut skipped = Vec::new();
     for repo in gitea.discover()? {
+        // Before anything else: an archived repository is read-only, so a sync
+        // would do all the work and then fail at the push. Reported rather than
+        // dropped, so a repository that vanishes from the list has a reason.
+        if repo.archived {
+            skipped.push((repo.name, Skipped::Archived));
+            continue;
+        }
+        // A mirror carries an upstream and a sensible branch, so it passes
+        // every other test here. The forge owns its contents.
+        if repo.mirror {
+            skipped.push((repo.name, Skipped::Mirror));
+            continue;
+        }
         if let Some(pattern) = watch
             .except
             .iter()
@@ -926,7 +939,7 @@ pub fn discover(
     Ok(gitea
         .discover()?
         .into_iter()
-        .filter(|repo| !known.contains(&repo.name))
+        .filter(|repo| !repo.archived && !repo.mirror && !known.contains(&repo.name))
         .collect())
 }
 

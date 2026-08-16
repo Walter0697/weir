@@ -1083,6 +1083,16 @@ pub async fn watches(State(app): State<App>) -> impl IntoResponse {
                                                                 "the forge does not record an upstream for it"
                                                             }
                                                         }
+                                                        Skipped::Archived => {
+                                                            span class="small muted" {
+                                                                "read-only, so nothing can be pushed to it"
+                                                            }
+                                                        }
+                                                        Skipped::Mirror => {
+                                                            span class="small muted" {
+                                                                "the forge replaces its contents from upstream"
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }

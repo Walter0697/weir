@@ -5,9 +5,14 @@
 //! the forge on Tuesday is covered on Wednesday without anyone touching
 //! configuration.
 //!
-//! Three things narrow it, and all three are reported rather than applied
+//! Four things narrow it, and all four are reported rather than applied
 //! quietly — a rule you cannot see the effect of is a rule you cannot trust:
 //!
+//! - **Archived repositories**, which are read-only. A sync would do the whole
+//!   job and then fail at the push, every run.
+//! - **Pull mirrors**, which the forge overwrites from upstream on its own
+//!   schedule. One looks exactly like a well-configured fork and is the worst
+//!   thing here to sync: whatever a sync landed would be silently discarded.
 //! - **Exceptions**, which you write. Names or simple `*` patterns.
 //! - **Explicit forks**, which win. Watching an owner and also configuring one
 //!   of its repositories by hand is how you keep `keep_removed` or a different
@@ -72,6 +77,11 @@ pub enum Skipped {
     ConfiguredSeparately,
     /// The forge does not record where it came from, so there is no upstream.
     NoUpstream,
+    /// Read-only on the forge. A sync would build a branch it cannot push.
+    Archived,
+    /// A pull mirror, which the forge overwrites from upstream on its own
+    /// schedule. Anything a sync landed there would be discarded, quietly.
+    Mirror,
 }
 
 impl Skipped {
@@ -80,6 +90,8 @@ impl Skipped {
             Skipped::Excepted(pattern) => format!("excepted by {pattern:?}"),
             Skipped::ConfiguredSeparately => "configured as its own fork".to_string(),
             Skipped::NoUpstream => "no upstream recorded on the forge".to_string(),
+            Skipped::Archived => "archived on the forge".to_string(),
+            Skipped::Mirror => "a pull mirror, which the forge overwrites".to_string(),
         }
     }
 }
@@ -153,6 +165,11 @@ mod tests {
 
     #[test]
     fn every_skip_says_why_in_words_rather_than_a_code() {
+        assert_eq!(Skipped::Archived.reason(), "archived on the forge");
+        assert_eq!(
+            Skipped::Mirror.reason(),
+            "a pull mirror, which the forge overwrites"
+        );
         assert_eq!(
             Skipped::Excepted("test-*".into()).reason(),
             "excepted by \"test-*\""

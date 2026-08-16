@@ -311,6 +311,16 @@ that row and the watch picks it up again.
   the rule.
 - **No recorded upstream, no sync.** There is nothing to sync *from*, so it is
   skipped and said out loud.
+- **Archived repositories are skipped**, because they are read-only — a sync
+  would do the whole job and fail at the push, every run.
+- **Pull mirrors are skipped**, and this is the important one. A mirror carries
+  an upstream and a sensible branch, so it passes every other test and looks
+  like a well-configured fork. The forge owns its contents and replaces them
+  from upstream on its own schedule, so anything a sync landed there would be
+  discarded without a word.
+
+**Migrate, do not mirror.** Both set `original_url`, but a migrated repository
+is yours to write to and a mirror is not.
 
 A watch reads both facts from the forge rather than guessing: the upstream from
 Gitea's `original_url`, recorded when a repository was migrated, and the branch

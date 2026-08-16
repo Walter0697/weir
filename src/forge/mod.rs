@@ -30,6 +30,13 @@ pub struct Description {
 pub struct Discovered {
     pub name: String,
     pub default_branch: String,
+    /// Read-only on the forge. Nothing can be pushed to it, so syncing one
+    /// would fail on every run rather than usefully.
+    pub archived: bool,
+    /// A pull mirror. The forge force-syncs it from upstream on its own
+    /// schedule, discarding anything local — so it looks like a perfectly
+    /// good fork and is the worst possible thing to sync.
+    pub mirror: bool,
     /// Where the repository was migrated from, when the forge recorded it.
     /// Gitea keeps this as `original_url`, which is usually exactly the
     /// upstream you want, so it can be offered rather than typed.
