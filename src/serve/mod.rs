@@ -34,12 +34,29 @@ pub struct App {
     /// flag is enough; it is replaced at the start of each batch rather than
     /// reset, so a stale cancel cannot carry into the next one.
     cancel: Arc<std::sync::Mutex<Cancel>>,
+    /// Whether a batch is in flight.
+    ///
+    /// Runs must be serial: two batches over the same fork force-push the same
+    /// branch against each other, and the second would replace the cancel
+    /// handle so that Stop could no longer reach the first.
+    running: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Held for the life of a batch; clears the in-flight flag however the batch
+/// ends, including a panic.
+struct RunGuard(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 pub async fn serve(store: Store, addr: SocketAddr) -> Result<()> {
     let app = App {
         store: Arc::new(store),
         cancel: Arc::new(std::sync::Mutex::new(Cancel::new())),
+        running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     let scheduler = app.clone();
@@ -135,6 +152,24 @@ impl App {
             boundary_file: settings.boundary_file,
             dry_run,
         })
+    }
+
+    /// Claims the right to run, or reports that something else already has it.
+    fn try_start(&self) -> Option<(RunGuard, Cancel)> {
+        use std::sync::atomic::Ordering;
+        self.running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()?;
+        let cancel = Cancel::new();
+        *self
+            .cancel
+            .lock()
+            .expect("the cancel lock is never poisoned") = cancel.clone();
+        Some((RunGuard(self.running.clone()), cancel))
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn notifiers(&self) -> Vec<Box<dyn Notifier>> {
@@ -781,18 +816,23 @@ async fn trigger_run(
         }
     };
 
-    // A fresh flag per batch, so pressing stop on one run cannot silently kill
-    // the next one somebody starts.
-    let cancel = Cancel::new();
-    *app.cancel
-        .lock()
-        .expect("the cancel lock is never poisoned") = cancel.clone();
+    // Refused rather than queued. Two batches over the same fork force-push the
+    // same branch against each other, and the arriving one would take over the
+    // cancel handle so Stop could no longer reach the first.
+    let Some((guard, cancel)) = app.try_start() else {
+        return pages::error_page(
+            "Something is already syncing",
+            "Wait for it to finish, or press Stop, then try again. Runs are deliberately \
+             serial — two at once would push the same branch against each other.",
+        );
+    };
 
     // Handed to a blocking thread and not waited on: a sync takes minutes, and
     // a browser request that hangs that long is one the user will reload,
     // starting a second sync on top of the first.
     let worker = app.clone();
     tokio::task::spawn_blocking(move || {
+        let _guard = guard;
         for fork in selected {
             // Between repositories as well as inside them, so stopping a batch
             // of five does not sync the remaining four first.

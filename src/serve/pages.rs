@@ -282,7 +282,7 @@ pub async fn dashboard(State(app): State<App>) -> impl IntoResponse {
                 div class="row" style="justify-content:space-between; margin-bottom:.5rem" {
                     h2 style="margin:0" { "Syncing" }
                     div class="row" {
-                        @let running = runs.iter().any(|r| r.finished_at.is_none());
+                        @let running = app.is_running();
                         @if running {
                             form method="post" action="/cancel" style="display:inline" {
                                 button class="danger" type="submit" { "Stop" }
