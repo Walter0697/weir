@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/Walter0697/weir/compare/v0.4.0...v0.4.1) (2026-08-17)
+
+
+### Fixes
+
+* stop git writing the bot's credential into the user's config ([e4721d6](https://github.com/Walter0697/weir/commit/e4721d6b378b5aa24e1b10df3d557b39cb2c43eb))
+
 ## [0.4.0](https://github.com/Walter0697/weir/compare/v0.3.1...v0.4.0) (2026-08-16)
 
 
