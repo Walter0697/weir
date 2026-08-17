@@ -203,7 +203,19 @@ fn command(root: Option<&Path>, credential: Option<&Credential>, identity: &Iden
         .arg("-c")
         .arg(format!("user.email={}", identity.email))
         .arg("-c")
-        .arg("commit.gpgsign=false");
+        .arg("commit.gpgsign=false")
+        // No credential helper, for this process only.
+        //
+        // After a successful authentication git runs `credential approve`, and
+        // a configured `store` helper writes the token into the user's
+        // ~/.git-credentials — where, being first, it then answers for every
+        // other repository on that host. Running weir on a workstation would
+        // quietly re-authenticate the person as the machine account.
+        //
+        // GIT_ASKPASS exists precisely so the token stays in this process, and
+        // this is the line that stops git undoing that.
+        .arg("-c")
+        .arg("credential.helper=");
     // Never block waiting for a human. Without this a missing credential hangs
     // a scheduled run until it is killed.
     cmd.env("GIT_TERMINAL_PROMPT", "0");
