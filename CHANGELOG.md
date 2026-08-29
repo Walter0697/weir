@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.2](https://github.com/Walter0697/weir/compare/v0.4.1...v0.4.2) (2026-08-29)
+
+
+### Fixes
+
+* retry concurrent sync branch pushes ([0d643a6](https://github.com/Walter0697/weir/commit/0d643a6bc9905c00f256567edc42977db25c4767))
+
+
+### Documentation
+
+* plan resilient sync branch pushes ([03ecbef](https://github.com/Walter0697/weir/commit/03ecbefa8d26a0ac78c9cfda8b1ce3dcf0481f18))
+
 ## [0.4.1](https://github.com/Walter0697/weir/compare/v0.4.0...v0.4.1) (2026-08-17)
 
 
