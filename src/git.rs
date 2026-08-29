@@ -185,6 +185,13 @@ pub struct Output {
     pub stderr: String,
 }
 
+/// Git protects a ref from being overwritten by a concurrent writer even when
+/// the push is forced. A fresh push gets a fresh advertisement of that ref and
+/// can safely retry; other failures need to remain visible to the caller.
+fn is_concurrent_ref_update(output: &str) -> bool {
+    output.contains("incorrect old value provided") || output.contains("cannot lock ref")
+}
+
 impl Output {
     pub fn ok(&self) -> bool {
         self.status == 0
@@ -468,20 +475,51 @@ impl Git {
 
     /// Force-updates `branch` on `remote` from the current head.
     pub fn force_push(&self, remote: &str, branch: &str) -> Result<()> {
-        self.run(&[
-            "push",
-            "--quiet",
-            "--force",
-            remote,
-            &format!("HEAD:refs/heads/{branch}"),
-        ])?;
-        Ok(())
+        const MAX_ATTEMPTS: usize = 3;
+        let refspec = format!("HEAD:refs/heads/{branch}");
+        let args = ["push", "--quiet", "--force", remote, refspec.as_str()];
+
+        for attempt in 1..=MAX_ATTEMPTS {
+            let output = self.try_run(&args)?;
+            if output.ok() {
+                return Ok(());
+            }
+
+            let detail = if output.stderr.is_empty() {
+                &output.stdout
+            } else {
+                &output.stderr
+            };
+            if attempt == MAX_ATTEMPTS || !is_concurrent_ref_update(detail) {
+                bail!(
+                    "`git {}` failed with status {}: {}",
+                    args.join(" "),
+                    output.status,
+                    detail
+                );
+            }
+
+            self.cancel.check()?;
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        unreachable!("the force push loop always returns")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_concurrent_ref_update_is_retryable_but_other_push_errors_are_not() {
+        assert!(is_concurrent_ref_update(
+            "remote: error: cannot lock ref 'refs/heads/upstream-sync': is at newer but expected older\nerror: failed to push"
+        ));
+        assert!(!is_concurrent_ref_update(
+            "remote: error: upload-pack: not our ref deadbeef\nfatal: authentication failed"
+        ));
+    }
 
     fn repo() -> (tempfile::TempDir, Git) {
         let dir = tempfile::TempDir::new().unwrap();
