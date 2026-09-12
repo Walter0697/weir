@@ -23,6 +23,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use chrono::Timelike;
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -988,6 +989,13 @@ pub fn parse_cron(expression: &str) -> std::result::Result<croner::Cron, String>
         .map_err(|error| error.to_string())
 }
 
+fn cron_matches_current_minute(cron: &croner::Cron, now: &chrono::DateTime<chrono::Local>) -> bool {
+    let minute = now
+        .with_second(0)
+        .expect("setting seconds to zero is valid");
+    cron.is_time_matching(&minute).unwrap_or(false)
+}
+
 /// Fires the schedule when it comes round.
 ///
 /// Checked once a minute against the wall clock rather than slept precisely:
@@ -1015,7 +1023,7 @@ async fn schedule_loop(app: App) {
         if stamp == last_fired {
             continue;
         }
-        if !cron.is_time_matching(&now).unwrap_or(false) {
+        if !cron_matches_current_minute(&cron, &now) {
             continue;
         }
         last_fired = stamp;
@@ -1050,6 +1058,7 @@ pub type DiscoverParams = Query<DiscoverQuery>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn a_clone_url_becomes_a_page_you_can_open() {
@@ -1093,6 +1102,16 @@ mod tests {
     fn a_typo_is_rejected_rather_than_accepted_and_silently_never_fired() {
         assert!(parse_cron("not a schedule").is_err());
         assert!(parse_cron("99 * * * *").is_err());
+    }
+
+    #[test]
+    fn a_schedule_matches_when_checked_after_the_start_of_its_minute() {
+        let cron = parse_cron("0 5 * * 5").unwrap();
+        let checked_at = chrono::Local
+            .with_ymd_and_hms(2026, 9, 11, 5, 0, 14)
+            .unwrap();
+
+        assert!(cron_matches_current_minute(&cron, &checked_at));
     }
 
     #[test]
