@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.3](https://github.com/Walter0697/weir/compare/v0.4.2...v0.4.3) (2026-09-12)
+
+
+### Fixes
+
+* align scheduled cron checks to minute boundaries ([4bb2053](https://github.com/Walter0697/weir/commit/4bb205383989998a892386329080fdb0993ce8b4))
+
+
+### Documentation
+
+* design scheduler boundary fix ([308cdac](https://github.com/Walter0697/weir/commit/308cdac86fcb96f9185bb735f94ea37c5a2f518b))
+
 ## [0.4.2](https://github.com/Walter0697/weir/compare/v0.4.1...v0.4.2) (2026-08-29)
 
 
