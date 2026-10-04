@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.4](https://github.com/Walter0697/weir/compare/v0.4.3...v0.4.4) (2026-10-04)
+
+
+### Fixes
+
+* reconcile timed out gitea pull request mutations ([4be4ddd](https://github.com/Walter0697/weir/commit/4be4ddd651a2b64b7f14eba1afd99f0e13302182))
+* reconcile timed out Gitea pull request mutations ([0776bb2](https://github.com/Walter0697/weir/commit/0776bb23e0b86efd0d8181fad9ec9798d79cd258))
+
 ## [0.4.3](https://github.com/Walter0697/weir/compare/v0.4.2...v0.4.3) (2026-09-12)
 
 
